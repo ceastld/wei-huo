@@ -49,14 +49,26 @@ const AudioFx = (() => {
     src.start();
   }
 
-  return {
+  const api = {
     unlock() { ac(); },
+    beep() { beep(660, 0.05, 'square', 0.04); },
     dash() { beep(420, 0.08, 'sawtooth', 0.05, 180); },
-    boom() { noise(0.16, 0.1, 700); beep(140, 0.12, 'triangle', 0.07, 60); },
+    explode() { noise(0.16, 0.1, 700); beep(140, 0.12, 'triangle', 0.07, 60); },
     fizzle() { beep(720, 0.07, 'sine', 0.035, 220); },
     hurt() { beep(220, 0.16, 'square', 0.07, 80); },
-    heal() { beep(520, 0.1, 'sine', 0.05, 780); },
+    pickup() { beep(520, 0.1, 'sine', 0.05, 780); },
     win() { beep(440, 0.1, 'sine', 0.06); setTimeout(() => beep(660, 0.18, 'sine', 0.06), 90); },
-    open() { beep(180, 0.06, 'triangle', 0.04, 90); },
   };
+  api.boom = function () { api.explode(); };
+  api.heal = function () { api.pickup(); };
+  api.open = function () { api.beep(); };
+  return api;
 })();
+
+if (typeof window !== 'undefined') {
+  window.AudioFx = AudioFx;
+  window.WeiHuoAudio = AudioFx;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = AudioFx;
+}
