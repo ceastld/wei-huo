@@ -3,6 +3,8 @@
 const TAIL_T = 2.0;
 const HASTE_T = 0.55;
 const ECHO_T = 0.45;
+const SPLIT_T = 0.28;
+const SPLIT_D = 80;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -70,6 +72,7 @@ const NAMES = {
   echo: '回爆',
   suck: '吸爆',
   dashBoom: '冲爆',
+  split: '裂爆',
   eater: '拾烬',
 };
 
@@ -125,6 +128,10 @@ const TOAST = {
   dashBoomGet: '捡到冲爆',
   dashBoomUse: '冲爆来了',
   dashBoomRoom: '冲爆会引爆',
+  splitGet: '捡到裂爆',
+  splitUse: '裂爆来了',
+  splitBoom: '裂开了',
+  splitRoom: '裂爆会裂开',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -138,6 +145,7 @@ const COL = {
   echo: '#e8b45a',
   suck: '#4ad8c8',
   dashBoom: '#b8ff4a',
+  split: '#7ad0ff',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -328,6 +336,7 @@ function lootKind(drop) {
   if (drop === '回爆' || drop === 'echo') return 'echo';
   if (drop === '吸爆' || drop === 'suck') return 'suck';
   if (drop === '冲爆' || drop === 'dashboom') return 'dashboom';
+  if (drop === '裂爆' || drop === 'split') return 'split';
   return null;
 }
 
@@ -382,8 +391,11 @@ function makeState() {
     echoReady: false,
     suckReady: false,
     dashBoomReady: false,
+    splitReady: false,
     echoes: [],
     echoing: false,
+    splits: [],
+    splitting: false,
     watch: false,
     watchSide: 1,
     watchStuckT: 0,
@@ -427,9 +439,13 @@ function resetRoom(s, index, keepHearts) {
   s.echoReady = false;
   s.suckReady = false;
   s.dashBoomReady = false;
+  s.splitReady = false;
   s.echoing = false;
+  s.splitting = false;
   if (!s.echoes) s.echoes = [];
   s.echoes.length = 0;
+  if (!s.splits) s.splits = [];
+  s.splits.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -519,6 +535,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '响廊') toast(s, TOAST.echoRoom, 1.4, COL.echo);
   else if (room.name === '吸廊') toast(s, TOAST.suckRoom, 1.4, COL.suck);
   else if (room.name === '冲廊') toast(s, TOAST.dashBoomRoom, 1.4, COL.dashBoom);
+  else if (room.name === '裂廊') toast(s, TOAST.splitRoom, 1.4, COL.split);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -884,8 +901,10 @@ function updateEmbers(s, dt, canHurt) {
 
 function explode(s, x, y, hot, fused, haste, opts) {
   const echoing = opts === true || (opts && opts.echo) || !!s.echoing;
+  const splitting = !!(opts && opts.split) || !!s.splitting;
+  const forked = echoing || splitting;
   let seeded = false;
-  if (!echoing && s.seed) {
+  if (!forked && s.seed) {
     seeded = true;
     s.seed = 0;
     hot = true;
@@ -965,7 +984,7 @@ function explode(s, x, y, hot, fused, haste, opts) {
     s.chainToastT = 2.2;
   }
 
-  if (!echoing && s.suckReady) {
+  if (!forked && s.suckReady) {
     s.suckReady = false;
     let sucked = 0;
     for (let i = 0; i < s.sparks.length; i++) {
@@ -1011,7 +1030,7 @@ function explode(s, x, y, hot, fused, haste, opts) {
     punch(s, 10);
   }
   noteBoom(s, chained, !!fused);
-  if (echoing) return;
+  if (forked) return;
   if (s.echoReady) {
     s.echoReady = false;
     const echoHot = !!hot || seeded;
@@ -1023,6 +1042,70 @@ function explode(s, x, y, hot, fused, haste, opts) {
       r: echoHot ? HOT_BLAST_R : BLAST_R,
       wait: true,
     });
+  }
+  if (s.splitReady) {
+    s.splitReady = false;
+    let fx = s.player.faceX;
+    let fy = s.player.faceY;
+    let fl = Math.hypot(fx, fy);
+    if (fl < 0.001) {
+      fx = 1;
+      fy = 0;
+      fl = 1;
+    } else {
+      fx /= fl;
+      fy /= fl;
+    }
+    const px = -fy;
+    const py = fx;
+    const pr = s.player.r || PLAYER_R;
+    const splitHot = !!hot;
+    if (!s.splits) s.splits = [];
+    const a = {
+      x: clamp(x + px * SPLIT_D, pr, s.roomW - pr),
+      y: clamp(y + py * SPLIT_D, pr, s.roomH - pr),
+      hot: splitHot,
+      t: SPLIT_T,
+      r: splitHot ? HOT_BLAST_R : BLAST_R,
+      wait: true,
+    };
+    const b = {
+      x: clamp(x - px * SPLIT_D, pr, s.roomW - pr),
+      y: clamp(y - py * SPLIT_D, pr, s.roomH - pr),
+      hot: splitHot,
+      t: SPLIT_T,
+      r: splitHot ? HOT_BLAST_R : BLAST_R,
+      wait: true,
+    };
+    s.splits.push(a);
+    s.splits.push(b);
+    toast(s, TOAST.splitUse, 1.1, COL.split);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      burst(s, x, y, 8, COL.split, 190);
+      burst(s, x, y, 4, COL.gold, 170);
+      const markR = SPLIT_D * 0.35;
+      s.rings.push({
+        x: a.x, y: a.y,
+        r0: markR * 0.55,
+        r1: markR,
+        t: 0,
+        grow: 0.02,
+        life: 0.14,
+        hot: false,
+        split: true,
+      });
+      s.rings.push({
+        x: b.x, y: b.y,
+        r0: markR * 0.55,
+        r1: markR,
+        t: 0,
+        grow: 0.02,
+        life: 0.14,
+        hot: false,
+        split: true,
+      });
+    }
   }
 }
 
@@ -1141,6 +1224,28 @@ function updateEchoes(s, dt) {
   }
 }
 
+function updateSplits(s, dt) {
+  if (!s.splits || !s.splits.length) return;
+  let announced = false;
+  for (let i = s.splits.length - 1; i >= 0; i--) {
+    const e = s.splits[i];
+    if (e.wait) {
+      e.wait = false;
+      continue;
+    }
+    e.t -= dt;
+    if (e.t > 0) continue;
+    s.splits.splice(i, 1);
+    s.splitting = true;
+    explode(s, e.x, e.y, e.hot);
+    s.splitting = false;
+    if (!announced) {
+      toast(s, TOAST.splitBoom, 1.1, COL.split);
+      announced = true;
+    }
+  }
+}
+
 function updateRings(s, dt) {
   for (let i = s.rings.length - 1; i >= 0; i--) {
     s.rings[i].t += dt;
@@ -1230,6 +1335,7 @@ function watchSteer(s, dt) {
   let echoIt = null;
   let suckIt = null;
   let dashBoomIt = null;
+  let splitIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -1239,8 +1345,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'echo') echoIt = it;
     if (it.kind === 'suck') suckIt = it;
     if (it.kind === 'dashboom') dashBoomIt = it;
+    if (it.kind === 'split') splitIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt);
 
   let guard = null;
   let gd = 1e9;
@@ -1298,6 +1405,10 @@ function watchSteer(s, dt) {
   } else if (!s.dashBoomReady && dashBoomIt) {
     tx = dashBoomIt.x - p.x;
     ty = dashBoomIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.splitReady && splitIt) {
+    tx = splitIt.x - p.x;
+    ty = splitIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && gd < 150) {
     const orbit = circleAim(p.x, p.y, guard.x, guard.y, 128, side);
@@ -1457,6 +1568,7 @@ function update(s, dt) {
     s.pendingNext -= dt;
     updateSparks(s, dt);
     updateEchoes(s, dt);
+    updateSplits(s, dt);
     updateEmbers(s, dt, false);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -1465,6 +1577,7 @@ function update(s, dt) {
   if (s.won || s.dead) {
     updateSparks(s, dt);
     updateEchoes(s, dt);
+    updateSplits(s, dt);
     updateEmbers(s, dt, false);
     return;
   }
@@ -1559,6 +1672,7 @@ function update(s, dt) {
 
   updateSparks(s, dt);
   updateEchoes(s, dt);
+  updateSplits(s, dt);
   updateEmbers(s, dt, true);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -1619,6 +1733,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.gold, 130);
       burst(s, it.x, it.y, 4, COL.dashBoom, 110);
+      punch(s, 3);
+    } else if (it.kind === 'split') {
+      s.splitReady = true;
+      toast(s, TOAST.splitGet, 1.1, COL.split);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.gold, 130);
+      burst(s, it.x, it.y, 4, COL.split, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -1830,6 +1951,26 @@ function draw(s, ctx) {
     ctx.fillText(NAMES.echo, e.x, e.y + rad + 12);
   }
 
+  for (let i = 0; i < (s.splits || []).length; i++) {
+    const e = s.splits[i];
+    const rad = e.r || (e.hot ? HOT_BLAST_R : BLAST_R);
+    let a = 0.4;
+    if (!reducedMotion()) {
+      a = 0.28 + 0.18 * (0.5 + 0.5 * Math.sin((s.time || 0) * 8));
+    }
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = COL.split;
+    ctx.lineWidth = 2 / fit.scale;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = COL.split;
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(NAMES.split, e.x, e.y + rad + 12);
+  }
+
   for (let i = 0; i < s.rings.length; i++) {
     const ring = s.rings[i];
     let rad;
@@ -1837,12 +1978,12 @@ function draw(s, ctx) {
     let a;
     if (ring.t < ring.grow) {
       rad = lerp(ring.r0, ring.r1, ring.t / ring.grow);
-      col = ring.dashBoom ? COL.dashBoom : (ring.suck ? COL.suck : COL.ember);
+      col = ring.split ? COL.split : (ring.dashBoom ? COL.dashBoom : (ring.suck ? COL.suck : COL.ember));
       a = 0.85;
     } else {
       const k = (ring.t - ring.grow) / (ring.life - ring.grow);
       rad = lerp(ring.r1, 0, k);
-      col = ring.dashBoom ? COL.dashBoom : (ring.suck ? COL.suck : COL.gold);
+      col = ring.split ? COL.split : (ring.dashBoom ? COL.dashBoom : (ring.suck ? COL.suck : COL.gold));
       a = 0.85 * (1 - k);
     }
     if (rad > 0.4) {
@@ -1961,6 +2102,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.dashBoom, it.x, it.y - 16);
+    } else if (it.kind === 'split') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.split, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.split;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.split;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.split, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -2217,6 +2373,27 @@ function draw(s, ctx) {
     ctx.arc(dx, dy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.splitReady) {
+    let lx;
+    let ly;
+    if (reducedMotion()) {
+      lx = p.x - 12;
+      ly = p.y;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2;
+      lx = p.x + Math.cos(a) * 16;
+      ly = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, lx, ly, 8, COL.split, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.split;
+    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(lx, ly, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -2421,6 +2598,12 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (suckEl && s.dashBoomReady && !s.suckReady) {
     suckEl.textContent = NAMES.dashBoom;
   }
+  const splitEl = (typeof document !== 'undefined') ? document.getElementById('split') : null;
+  if (splitEl) {
+    splitEl.textContent = s.splitReady ? NAMES.split : '';
+  } else if (dashBoomEl && s.splitReady && !s.dashBoomReady) {
+    dashBoomEl.textContent = NAMES.split;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -2503,10 +2686,12 @@ function selfCheck() {
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
   if (HASTE_T !== 0.55) throw new Error('HASTE_T 0.55');
   if (ECHO_T !== 0.45) throw new Error('ECHO_T 0.45');
+  if (SPLIT_T !== 0.28) throw new Error('SPLIT_T 0.28');
+  if (SPLIT_D !== 80) throw new Error('SPLIT_D 80');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 21) throw new Error('need 21 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊'];
+  if (!ROOMS || ROOMS.length !== 22) throw new Error('need 22 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -2538,6 +2723,8 @@ function selfCheck() {
   if (ROOMS[19].name !== '吸廊') throw new Error('room 20 吸廊');
   if (ROOMS[20].id !== 'chonglang') throw new Error('冲廊 id');
   if (ROOMS[20].name !== '冲廊') throw new Error('room 21 冲廊');
+  if (ROOMS[21].id !== 'lielang') throw new Error('裂廊 id');
+  if (ROOMS[21].name !== '裂廊') throw new Error('room 22 裂廊');
   if (SEED_R !== 72) throw new Error('SEED_R 72');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
@@ -2551,7 +2738,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -2698,10 +2885,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/21') throw new Error('HUD 空场 1/21');
+  if (roomHudText(hud0) !== '空场 · 1/22') throw new Error('HUD 空场 1/22');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/21') throw new Error('HUD 3/21');
+  if (roomHudText(hud2) !== '水巷 · 3/22') throw new Error('HUD 3/22');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -2913,7 +3100,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/21') throw new Error('HUD 灰径 11/21');
+  if (roomHudText(hudAsh) !== '灰径 · 11/22') throw new Error('HUD 灰径 11/22');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -2940,7 +3127,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/21') throw new Error('HUD 环行 12/21');
+  if (roomHudText(hudRing) !== '环行 · 12/22') throw new Error('HUD 环行 12/22');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -2969,7 +3156,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/21') throw new Error('HUD 密线 13/21');
+  if (roomHudText(hudWire) !== '密线 · 13/22') throw new Error('HUD 密线 13/22');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -3285,7 +3472,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/21') throw new Error('HUD 潮廊 14/21');
+  if (roomHudText(hudChao) !== '潮廊 · 14/22') throw new Error('HUD 潮廊 14/22');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -3352,7 +3539,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/21') throw new Error('HUD 种廊 15/21');
+  if (roomHudText(hudZhong) !== '种廊 · 15/22') throw new Error('HUD 种廊 15/22');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -3479,7 +3666,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/21') throw new Error('HUD 油廊 16/21');
+  if (roomHudText(hudYou) !== '油廊 · 16/22') throw new Error('HUD 油廊 16/22');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -3557,7 +3744,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/21') throw new Error('HUD 急廊 17/21');
+  if (roomHudText(hudJi) !== '急廊 · 17/22') throw new Error('HUD 急廊 17/22');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -3880,7 +4067,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/21') throw new Error('HUD 拾廊 18/21');
+  if (roomHudText(hudShi) !== '拾廊 · 18/22') throw new Error('HUD 拾廊 18/22');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -3902,7 +4089,17 @@ function selfCheck() {
   if (TOAST.dashBoomUse !== '冲爆来了') throw new Error('冲爆来了');
   if (TOAST.dashBoomRoom !== '冲爆会引爆') throw new Error('冲爆会引爆');
   if (lootKind('冲爆') !== 'dashboom' || lootKind('dashboom') !== 'dashboom') throw new Error('lootKind 冲爆');
+  if (NAMES.split !== '裂爆') throw new Error('裂爆 name');
+  if (COL.split !== '#7ad0ff') throw new Error('COL.split');
+  if (SPLIT_T !== 0.28) throw new Error('SPLIT_T 0.28');
+  if (SPLIT_D !== 80) throw new Error('SPLIT_D 80');
+  if (TOAST.splitGet !== '捡到裂爆') throw new Error('捡到裂爆');
+  if (TOAST.splitUse !== '裂爆来了') throw new Error('裂爆来了');
+  if (TOAST.splitBoom !== '裂开了') throw new Error('裂开了');
+  if (TOAST.splitRoom !== '裂爆会裂开') throw new Error('裂爆会裂开');
+  if (lootKind('裂爆') !== 'split' || lootKind('split') !== 'split') throw new Error('lootKind 裂爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
   const echoDry = makeState();
   resetRoom(echoDry, 0, false);
@@ -4079,7 +4276,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/21') throw new Error('HUD 响廊 19/21');
+  if (roomHudText(hudXiang) !== '响廊 · 19/22') throw new Error('HUD 响廊 19/22');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -4271,7 +4468,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/21') throw new Error('HUD 吸廊 20/21');
+  if (roomHudText(hudXi) !== '吸廊 · 20/22') throw new Error('HUD 吸廊 20/22');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -4370,6 +4567,7 @@ function selfCheck() {
   dashKeepOthers.hasteReady = true;
   dashKeepOthers.echoReady = true;
   dashKeepOthers.suckReady = true;
+  dashKeepOthers.splitReady = true;
   dashKeepOthers.dashBoomReady = true;
   dashKeepOthers.input.dash = true;
   update(dashKeepOthers, 0.016);
@@ -4378,6 +4576,7 @@ function selfCheck() {
   if (dashKeepOthers.hasteReady !== true) throw new Error('冲爆 keeps 急燃');
   if (dashKeepOthers.echoReady !== true) throw new Error('冲爆 keeps 回爆');
   if (dashKeepOthers.suckReady !== true) throw new Error('冲爆 keeps 吸爆');
+  if (dashKeepOthers.splitReady !== true) throw new Error('冲爆 keeps 裂爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -4483,11 +4682,252 @@ function selfCheck() {
   explode(chong, cBox.x + cBox.w * 0.5, cBox.y - 20, false);
   if (!cBox.open) throw new Error('冲廊 dry trail should open 心核');
   takeCore(chong, { x: 100, y: 100 });
-  if (!chong.won || chong.toast !== TOAST.all) throw new Error('冲廊 should 通关');
+  if (chong.won) throw new Error('冲廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(chong, 0.1);
+  if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/21') throw new Error('HUD 冲廊 21/21');
+  if (roomHudText(hudChong) !== '冲廊 · 21/22') throw new Error('HUD 冲廊 21/22');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+
+  const splitDry = makeState();
+  resetRoom(splitDry, 0, false);
+  splitDry.splitReady = true;
+  splitDry.player.faceX = 1;
+  splitDry.player.faceY = 0;
+  explode(splitDry, 400, 200, false);
+  if (splitDry.splitReady !== false) throw new Error('splitReady consumed on boom');
+  if (!splitDry.splits || splitDry.splits.length !== 2) throw new Error('split queued 2');
+  for (let i = 0; i < 10; i++) update(splitDry, 0.05);
+  if (splitDry.stats.booms !== 3) throw new Error('split two satellites');
+  const satA = dist(splitDry.lastBoomX, splitDry.lastBoomY, 400, 120) <= 4
+    || dist(splitDry.lastBoomX, splitDry.lastBoomY, 400, 280) <= 4;
+  if (!satA) throw new Error('split last satellite near fork');
+  let near120 = 0;
+  let near280 = 0;
+  for (let i = 0; i < splitDry.embers.length; i++) {
+    const em = splitDry.embers[i];
+    if (dist(em.x, em.y, 400, 120) <= 4) near120 += 1;
+    if (dist(em.x, em.y, 400, 280) <= 4) near280 += 1;
+  }
+  if (near120 < 1 || near280 < 1) throw new Error('split satellites at 400,120 / 400,280');
+  const splitToast = String(splitDry.toast);
+  if (splitToast.indexOf(TOAST.splitUse) < 0 && splitToast.indexOf(TOAST.splitBoom) < 0) {
+    throw new Error('裂爆来了 or 裂开了');
+  }
+
+  const splitOff = makeState();
+  resetRoom(splitOff, 0, false);
+  explode(splitOff, 400, 200, false);
+  if (splitOff.splits && splitOff.splits.length) throw new Error('no split no queue');
+  if (splitOff.stats.booms !== 1) throw new Error('no split one boom');
+
+  const splitWet = makeState();
+  resetRoom(splitWet, 0, false);
+  splitWet.splitReady = true;
+  splitWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(splitWet, 120, 120, false);
+  if (!splitWet.sparks[0].wet) throw new Error('split wet spark');
+  for (let i = 0; i < 24; i++) update(splitWet, 0.1);
+  if (splitWet.splitReady !== true) throw new Error('wet keeps 裂爆');
+  if (splitWet.stats.booms !== 0) throw new Error('wet split no boom');
+  if (splitWet.splits && splitWet.splits.length) throw new Error('wet no split queue');
+
+  const splitOnce = makeState();
+  resetRoom(splitOnce, 0, false);
+  splitOnce.splitReady = true;
+  splitOnce.player.faceX = 1;
+  splitOnce.player.faceY = 0;
+  explode(splitOnce, 400, 200, false);
+  if (splitOnce.splits.length !== 2) throw new Error('first boom forks');
+  for (let i = 0; i < 10; i++) update(splitOnce, 0.05);
+  const afterFork = splitOnce.stats.booms;
+  explode(splitOnce, 420, 220, false);
+  if (splitOnce.splits && splitOnce.splits.length) throw new Error('second boom no fork');
+  if (splitOnce.stats.booms !== afterFork + 1) throw new Error('second boom only one');
+  if (splitOnce.splitReady) throw new Error('split stays spent');
+
+  const splitKeepDrop = makeState();
+  resetRoom(splitKeepDrop, 0, false);
+  splitKeepDrop.splitReady = true;
+  dropSpark(splitKeepDrop, 200, 200, false);
+  if (splitKeepDrop.splitReady !== true) throw new Error('dropSpark keeps 裂爆');
+  splitKeepDrop.player.x = 80;
+  splitKeepDrop.player.y = 80;
+  splitKeepDrop.input.dash = true;
+  update(splitKeepDrop, 0.016);
+  if (splitKeepDrop.splitReady !== true) throw new Error('dash keeps 裂爆');
+  splitKeepDrop.player.dashT = 0;
+  splitKeepDrop.player.dashCd = 0;
+  splitKeepDrop.hitstop = 0;
+  splitKeepDrop.dashBoomReady = true;
+  splitKeepDrop.input.dash = true;
+  update(splitKeepDrop, 0.016);
+  if (splitKeepDrop.splitReady !== true) throw new Error('冲爆 keeps 裂爆');
+  if (splitKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends');
+
+  const splitSatKeep = makeState();
+  resetRoom(splitSatKeep, 0, false);
+  splitSatKeep.splitReady = true;
+  splitSatKeep.player.faceX = 1;
+  splitSatKeep.player.faceY = 0;
+  explode(splitSatKeep, 400, 200, false);
+  splitSatKeep.splitReady = true;
+  splitSatKeep.echoReady = true;
+  splitSatKeep.suckReady = true;
+  splitSatKeep.seed = 1;
+  for (let i = 0; i < 10; i++) update(splitSatKeep, 0.05);
+  if (splitSatKeep.splitReady !== true) throw new Error('satellite keeps split');
+  if (splitSatKeep.echoReady !== true) throw new Error('satellite keeps echo');
+  if (splitSatKeep.suckReady !== true) throw new Error('satellite keeps suck');
+  if (splitSatKeep.seed !== 1) throw new Error('satellite keeps seed');
+
+  const splitPick = makeState();
+  resetRoom(splitPick, 0, false);
+  if (splitPick.splitReady) throw new Error('split starts false');
+  splitPick.items.push({ kind: 'split', x: splitPick.player.x, y: splitPick.player.y, r: 10, taken: false });
+  update(splitPick, 0.016);
+  if (splitPick.splitReady !== true) throw new Error('pick 裂爆');
+  if (splitPick.toast !== TOAST.splitGet) throw new Error('捡到裂爆');
+
+  const splitKeepOthers = makeState();
+  resetRoom(splitKeepOthers, 0, false);
+  splitKeepOthers.seed = 1;
+  splitKeepOthers.hasteReady = true;
+  splitKeepOthers.echoReady = true;
+  splitKeepOthers.suckReady = true;
+  splitKeepOthers.dashBoomReady = true;
+  splitKeepOthers.splitReady = true;
+  splitKeepOthers.player.faceX = 1;
+  splitKeepOthers.player.faceY = 0;
+  explode(splitKeepOthers, 400, 220, false);
+  if (splitKeepOthers.splitReady) throw new Error('split boom spends split');
+  if (splitKeepOthers.echoReady) throw new Error('split boom still queues echo');
+  if (!splitKeepOthers.echoes || splitKeepOthers.echoes.length !== 1) throw new Error('split boom queues echo');
+  if (!splitKeepOthers.splits || splitKeepOthers.splits.length !== 2) throw new Error('split boom queues forks');
+  if (splitKeepOthers.seed !== 0) throw new Error('split boom is a real boom spends seed');
+  if (splitKeepOthers.hasteReady !== true) throw new Error('split does not spend haste');
+  if (splitKeepOthers.dashBoomReady !== true) throw new Error('split does not spend 冲爆');
+  if (splitKeepOthers.suckReady) throw new Error('split boom spends suck as real boom');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (SPLIT_T !== 0.28) throw new Error('SPLIT_T 0.28');
+  if (SPLIT_D !== 80) throw new Error('SPLIT_D 80');
+
+  const lie = makeState();
+  resetRoom(lie, 21, false);
+  if (lie.roomName !== '裂廊' || lie.roomId !== 'lielang') throw new Error('lielang load');
+  if (lie.toast !== TOAST.splitRoom) throw new Error('裂廊 intro');
+  if (lie.roomW !== 960 || lie.roomH !== 400) throw new Error('裂廊 size');
+  if (lie.player.x !== 80 || lie.player.y !== 200) throw new Error('裂廊 spawn');
+  if (lie.splitReady) throw new Error('裂廊 split starts false');
+  let lieStill = 0;
+  let lieTide = 0;
+  for (let i = 0; i < lie.waters.length; i++) {
+    if (lie.waters[i].tide) lieTide += 1;
+    else lieStill += 1;
+  }
+  if (lieStill < 1) throw new Error('裂廊 needs static 水洼');
+  if (lieTide) throw new Error('裂廊 no tide');
+  let lieCore = 0;
+  let lieHeal = 0;
+  let lieThick = 0;
+  let lieSplitItem = 0;
+  let lieDashItem = 0;
+  let lieSuckItem = 0;
+  let lieEchoItem = 0;
+  let lieHasteItem = 0;
+  let lieSeedItem = 0;
+  for (let i = 0; i < lie.crates.length; i++) {
+    if (lie.crates[i].loot === 'core') lieCore += 1;
+    if (lie.crates[i].loot === 'heal') lieHeal += 1;
+    if (lie.crates[i].thick) lieThick += 1;
+  }
+  for (let i = 0; i < lie.items.length; i++) {
+    if (lie.items[i].kind === 'split') lieSplitItem += 1;
+    if (lie.items[i].kind === 'dashboom') lieDashItem += 1;
+    if (lie.items[i].kind === 'suck') lieSuckItem += 1;
+    if (lie.items[i].kind === 'echo') lieEchoItem += 1;
+    if (lie.items[i].kind === 'haste') lieHasteItem += 1;
+    if (lie.items[i].kind === 'seed') lieSeedItem += 1;
+  }
+  if (lieSplitItem < 1) throw new Error('裂廊 needs 裂爆');
+  if (lieDashItem || lieSuckItem || lieEchoItem || lieHasteItem || lieSeedItem) {
+    throw new Error('裂廊 no 焰种/急燃/回爆/吸爆/冲爆');
+  }
+  if (lieCore !== 1) throw new Error('裂廊 心核');
+  if (lieHeal < 1) throw new Error('裂廊 回星');
+  const lBox = lie.crates.find(function (c) { return c.loot === 'core'; });
+  if (!lBox || lBox.thick) throw new Error('裂廊 心核 crate is not thick');
+  if (lieThick) throw new Error('裂廊 no thick crate');
+  let lieHound = 0;
+  let lieGuard = 0;
+  let lieMoth = 0;
+  let lieEater = 0;
+  for (let i = 0; i < lie.enemies.length; i++) {
+    if (isHound(lie.enemies[i])) lieHound += 1;
+    else if (isMoth(lie.enemies[i])) lieMoth += 1;
+    else if (isEater(lie.enemies[i])) lieEater += 1;
+    else lieGuard += 1;
+  }
+  if (lieGuard !== 1 || lieHound !== 0 || lieMoth !== 0 || lieEater !== 0) {
+    throw new Error('裂廊 烬卫 only');
+  }
+  if (inWater(lie, 80, 200) || inOil(lie, 80, 200)) throw new Error('裂廊 spawn dry');
+  if (inWater(lie, 280, 200) || inOil(lie, 280, 200)) throw new Error('裂廊 裂爆 dry');
+  if (inOil(lie, 860, 188) || inWater(lie, 860, 188)) throw new Error('裂廊 core dry');
+  if (!inWater(lie, 450, 350)) throw new Error('裂廊 wet bag');
+  if (inWater(lie, 400, 100)) throw new Error('裂廊 north shelf wet');
+  for (let i = 0; i < lie.crates.length; i++) {
+    const c = lie.crates[i];
+    if (circleRect(lie.player.x, lie.player.y, lie.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('裂廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 500; x += 10) {
+    for (let i = 0; i < lie.crates.length; i++) {
+      const c = lie.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('裂廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 700; x += 20) {
+    for (let y = 80; y <= 120; y += 20) {
+      if (inWater(lie, x, y)) throw new Error('裂廊 north puddle');
+      for (let i = 0; i < lie.enemies.length; i++) {
+        const e = lie.enemies[i];
+        if (dist(e.x, e.y, x, y) < e.r + 8) throw new Error('裂廊 north enemy');
+      }
+    }
+  }
+  const lPair = lie.crates.filter(function (c) {
+    const cx = c.x + c.w * 0.5;
+    return Math.abs(cx - 560) < 8 && !c.loot;
+  });
+  if (lPair.length < 2) throw new Error('裂廊 N/S crate pair');
+  lPair.sort(function (a, b) { return a.y - b.y; });
+  const pairDy = (lPair[lPair.length - 1].y + lPair[lPair.length - 1].h * 0.5)
+    - (lPair[0].y + lPair[0].h * 0.5);
+  if (pairDy < 200) throw new Error('裂廊 crate pair |Δy| >= 200');
+  explode(lie, 560, 200, false);
+  if (lPair[0].open || lPair[1].open) throw new Error('裂廊 BLAST_R misses N/S pair');
+  lie.splitReady = true;
+  lie.player.faceX = 1;
+  lie.player.faceY = 0;
+  explode(lie, 560, 200, false);
+  for (let i = 0; i < 10; i++) update(lie, 0.05);
+  if (!lPair[0].open || !lPair[1].open) throw new Error('裂廊 split opens N/S pair');
+  if (lie.stats.booms < 3) throw new Error('裂廊 center + 2 satellites');
+  explode(lie, lBox.x + lBox.w * 0.5, lBox.y - 20, false);
+  if (!lBox.open) throw new Error('裂廊 dry trail should open 心核');
+  takeCore(lie, { x: 100, y: 100 });
+  if (!lie.won || lie.toast !== TOAST.all) throw new Error('裂廊 should 通关');
+  const hudLie = makeState();
+  resetRoom(hudLie, 21, false);
+  if (roomHudText(hudLie) !== '裂廊 · 22/22') throw new Error('HUD 裂廊 22/22');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
