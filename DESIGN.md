@@ -13,3 +13,4 @@ v8：环行第十二房通关。箱围成开孔圆环，心核在洞里。绕环
 音效走 `window.WeiHuoAudio`（explode / dash / hurt / win / pickup / fizzle）。
 词表：焰辙、烬卫、循辙、灯蛾、余烬、焦痕、箱、水洼、心核、回星。不要写那六个禁词。
 v9：密线第十三房通关。蛇形密箱引线 + 5 连顿帧加料。HUD 房名 · 1/13。
+v10：A / HUD「观摩」跟玩当前房。绕开、铺辙、冲过自己的爆、把烬卫引进火花、箱开后去捡心核。速度可读，不瞬移。overlay 仍 pointer-events:none，只有观摩钮 auto。

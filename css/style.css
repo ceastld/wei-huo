@@ -201,3 +201,33 @@ html, body {
   color: var(--gold);
   text-shadow: 0 0 12px rgba(255, 210, 74, 0.45);
 }
+
+#watchBtn {
+  pointer-events: auto;
+  position: absolute;
+  top: 88px;
+  right: 16px;
+  z-index: 2;
+  padding: 6px 16px;
+  border: 1px solid rgba(255, 210, 74, 0.5);
+  background: rgba(20, 8, 10, 0.72);
+  color: var(--gold);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+#watchBtn.on {
+  background: rgba(255, 106, 26, 0.42);
+  border-color: var(--ember);
+  color: var(--ember);
+  box-shadow: 0 0 14px rgba(255, 106, 26, 0.45);
+}
+
+#watchBtn:active { background: rgba(255, 106, 26, 0.55); }
+
+@media (max-width: 720px) {
+  #watchBtn { top: 80px; right: 12px; font-size: 13px; padding: 5px 12px; }
+}

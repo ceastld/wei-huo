@@ -51,6 +51,7 @@ const NAMES = {
   ash: '余烬',
   scorch: '焦痕',
   hint: '跑过的路两秒后会爆',
+  watch: '观摩',
 };
 
 const TOAST = {
@@ -83,6 +84,8 @@ const TOAST = {
   ash: '余烬还烫',
   ring: '绕环能连环',
   wire: '密线一拉就炸',
+  watch: '观摩中',
+  watchOff: '手玩',
 };
 
 const COL = {
@@ -270,6 +273,11 @@ function makeState() {
     burstN: 0,
     burstWait: 0,
     lastCombo: 0,
+    watch: false,
+    watchSide: 1,
+    watchStuckT: 0,
+    watchLastX: 110,
+    watchLastY: 310,
   };
 }
 
@@ -830,6 +838,234 @@ function updateRings(s, dt) {
   }
 }
 
+
+function setWatch(s, on) {
+  s.watch = !!on;
+  s.watchSide = s.watchSide || 1;
+  s.watchStuckT = 0;
+  if (s.player) {
+    s.watchLastX = s.player.x;
+    s.watchLastY = s.player.y;
+  }
+  syncWatchBtn(s);
+}
+
+function toggleWatch(s) {
+  setWatch(s, !s.watch);
+  toast(s, s.watch ? TOAST.watch : TOAST.watchOff, 1.1, COL.gold);
+}
+
+function syncWatchBtn(s) {
+  if (typeof document === 'undefined') return;
+  const btn = document.getElementById('watchBtn');
+  if (!btn) return;
+  btn.textContent = NAMES.watch;
+  btn.classList.toggle('on', !!s.watch);
+  btn.setAttribute('aria-pressed', s.watch ? 'true' : 'false');
+}
+
+function circleAim(px, py, cx, cy, radius, side) {
+  const dx = px - cx;
+  const dy = py - cy;
+  const d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d;
+  const uy = dy / d;
+  const sign = side >= 0 ? 1 : -1;
+  const tangX = -uy * sign;
+  const tangY = ux * sign;
+  const radial = (d - radius) / Math.max(40, radius);
+  return {
+    x: tangX - ux * clamp(radial, -1.2, 1.2),
+    y: tangY - uy * clamp(radial, -1.2, 1.2),
+  };
+}
+
+function nearestSoonBlast(s, x, y, tMax, pad) {
+  let near = null;
+  let nd = 1e9;
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (k.dead || k.wet || k.t > tMax) continue;
+    const r = (k.hot ? HOT_BLAST_R : BLAST_R) + pad;
+    const d = dist(x, y, k.x, k.y);
+    if (d < r && d < nd) {
+      nd = d;
+      near = k;
+    }
+  }
+  return near;
+}
+
+function liveNearPoint(s, x, y, rad) {
+  let n = 0;
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (k.dead || k.wet) continue;
+    if (dist(x, y, k.x, k.y) <= rad) n += 1;
+  }
+  return n;
+}
+
+function watchSteer(s, dt) {
+  const p = s.player;
+  const pad = p.r + 18;
+  let tx = 0;
+  let ty = 0;
+  let dash = false;
+  let stand = false;
+
+  let core = null;
+  for (let i = 0; i < s.items.length; i++) {
+    const it = s.items[i];
+    if (!it.taken && it.kind === 'core') core = it;
+  }
+
+  let guard = null;
+  let gd = 1e9;
+  for (let i = 0; i < s.enemies.length; i++) {
+    const e = s.enemies[i];
+    if (e.hp <= 0 || isHound(e) || isMoth(e)) continue;
+    const d = dist(p.x, p.y, e.x, e.y);
+    if (d < gd) {
+      gd = d;
+      guard = e;
+    }
+  }
+
+  let crate = null;
+  let crateX = 0;
+  let crateY = 0;
+  let crateD = 1e9;
+  for (let i = 0; i < s.crates.length; i++) {
+    const c = s.crates[i];
+    if (c.open) continue;
+    const cx = c.x + c.w * 0.5;
+    const cy = c.y + c.h * 0.5;
+    const d = dist(p.x, p.y, cx, cy) + (c.loot === 'core' ? -80 : 0);
+    if (d < crateD) {
+      crateD = d;
+      crate = c;
+      crateX = cx;
+      crateY = cy;
+    }
+  }
+
+  const threat = nearestSoonBlast(s, p.x, p.y, 0.32, p.r + 16);
+  const side = s.watchSide || 1;
+
+  if (core) {
+    tx = core.x - p.x;
+    ty = core.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (guard && gd < 150) {
+    const orbit = circleAim(p.x, p.y, guard.x, guard.y, 128, side);
+    tx = orbit.x;
+    ty = orbit.y;
+  } else if (crate) {
+    const fuse = liveNearPoint(s, crateX, crateY, BLAST_R + 28);
+    const dC = dist(p.x, p.y, crateX, crateY);
+    if (fuse >= 2) {
+      if (dC < 108) {
+        tx = p.x - crateX;
+        ty = p.y - crateY;
+      } else {
+        stand = true;
+      }
+    } else {
+      const orbit = circleAim(p.x, p.y, crateX, crateY, 56, side);
+      tx = orbit.x;
+      ty = orbit.y;
+    }
+  } else if (guard) {
+    const orbit = circleAim(p.x, p.y, guard.x, guard.y, 128, side);
+    tx = orbit.x;
+    ty = orbit.y;
+  } else {
+    const orbit = circleAim(p.x, p.y, s.roomW * 0.5, s.roomH * 0.5, 140, side);
+    tx = orbit.x;
+    ty = orbit.y;
+  }
+
+  if (threat) {
+    tx = p.x - threat.x;
+    ty = p.y - threat.y;
+    stand = false;
+    if (p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  }
+
+  if (!core) {
+    let ember = null;
+    for (let i = 0; i < s.embers.length; i++) {
+      const em = s.embers[i];
+      if (dist(p.x, p.y, em.x, em.y) < em.r + p.r + 10) ember = em;
+    }
+    if (ember) {
+      tx = p.x - ember.x;
+      ty = p.y - ember.y;
+      stand = false;
+    }
+  }
+
+  const look = 28;
+  const nl0 = Math.hypot(tx, ty) || 1;
+  const nx = p.x + (tx / nl0) * look;
+  const ny = p.y + (ty / nl0) * look;
+  if (!core && !stand && inWater(s, nx, ny)) {
+    const px = -ty;
+    const py = tx;
+    const pl = Math.hypot(px, py) || 1;
+    if (!inWater(s, p.x + (px / pl) * look, p.y + (py / pl) * look)) {
+      tx = px;
+      ty = py;
+    } else {
+      tx = -px;
+      ty = -py;
+    }
+  }
+
+  if (p.x < pad) tx += 1.4;
+  if (p.x > s.roomW - pad) tx -= 1.4;
+  if (p.y < pad) ty += 1.4;
+  if (p.y > s.roomH - pad) ty -= 1.4;
+
+  const step = dist(
+    p.x, p.y,
+    s.watchLastX == null ? p.x : s.watchLastX,
+    s.watchLastY == null ? p.y : s.watchLastY
+  );
+  if (step < 2.5) s.watchStuckT = (s.watchStuckT || 0) + dt;
+  else s.watchStuckT = 0;
+  s.watchLastX = p.x;
+  s.watchLastY = p.y;
+  if (s.watchStuckT > 0.5) {
+    s.watchSide = -side;
+    s.watchStuckT = 0;
+    stand = false;
+  }
+
+  if (!dash && guard && gd < 36 && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+
+  if (stand && !dash) {
+    s.input.x = 0;
+    s.input.y = 0;
+    s.input.dash = false;
+    return;
+  }
+
+  const len = Math.hypot(tx, ty);
+  if (len < 0.001) {
+    tx = side;
+    ty = 0.35;
+  } else {
+    tx /= len;
+    ty /= len;
+  }
+
+  s.input.x = tx;
+  s.input.y = ty;
+  s.input.dash = dash;
+}
+
 function update(s, dt) {
   s.time += dt;
   if (s.toastT > 0) s.toastT -= dt;
@@ -878,6 +1114,8 @@ function update(s, dt) {
     updateEmbers(s, dt, false);
     return;
   }
+
+  if (s.watch) watchSteer(s, dt);
 
   const p = s.player;
   if (p.inv > 0) p.inv -= dt;
@@ -1307,7 +1545,7 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
     let y = 0;
     if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
     if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
+    if (keys.has('ArrowLeft')) x -= 1;
     if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
     if (!stick.active) {
       s.input.x = x;
@@ -1321,6 +1559,10 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
     if (e.code === 'Space') {
       e.preventDefault();
       s.input.dash = true;
+    }
+    if (e.code === 'KeyA') {
+      e.preventDefault();
+      if (!e.repeat) toggleWatch(s);
     }
     if (e.code === 'KeyR') {
       resetRoom(s, s.roomIndex, false);
@@ -1443,6 +1685,7 @@ function roomHudText(s) {
 }
 
 function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
+  syncWatchBtn(s);
   heartsEl.textContent = '心×' + s.player.hearts;
   if (roomEl) {
     roomEl.textContent = roomHudText(s);
@@ -1485,12 +1728,22 @@ function boot() {
   const knob = document.getElementById('knob');
   const dashBtn = document.getElementById('dashBtn');
   const touchRoot = document.getElementById('touch');
+  const watchBtn = document.getElementById('watchBtn');
   const s = makeState();
 
   function begin() {
     ensureRooms();
     resetRoom(s, 0, false);
     bindInput(s, canvas, stick, knob, dashBtn, touchRoot);
+    if (watchBtn) {
+      watchBtn.addEventListener('pointerdown', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        unlockAudio();
+        toggleWatch(s);
+      });
+    }
+    syncWatchBtn(s);
     fitCanvas(canvas);
     window.addEventListener('resize', function () { fitCanvas(canvas); });
     if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
@@ -1548,7 +1801,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾', '余烬', '焦痕'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -1568,6 +1821,11 @@ function selfCheck() {
   if (NAMES.hound !== '循辙') throw new Error('循辙 exists');
   if (NAMES.moth !== '灯蛾') throw new Error('灯蛾 name');
   if (NAMES.scorch !== '焦痕') throw new Error('焦痕 exists');
+  if (NAMES.watch !== '观摩') throw new Error('观摩 name');
+  if (TOAST.watch !== '观摩中') throw new Error('观摩中');
+  if (typeof setWatch !== 'function' || typeof watchSteer !== 'function') {
+    throw new Error('观摩 helpers');
+  }
   let houndN = 0;
   let mothN = 0;
   for (let r = 0; r < ROOMS.length; r++) {
@@ -2149,6 +2407,52 @@ function selfCheck() {
   explode(mothHp, mh.x, mh.y, false);
   if (mh.hp > 0) throw new Error('灯蛾 dies in 2 blasts');
 
+  const armed = makeState();
+  resetRoom(armed, 0, false);
+  if (armed.watch) throw new Error('观摩 off by default');
+  setWatch(armed, true);
+  if (!armed.watch) throw new Error('观摩 can be armed');
+  const ax = armed.player.x;
+  const ay = armed.player.y;
+  let maxStep = 0;
+  let px = ax;
+  let py = ay;
+  for (let i = 0; i < 24; i++) {
+    update(armed, 0.05);
+    const step = dist(armed.player.x, armed.player.y, px, py);
+    if (step > maxStep) maxStep = step;
+    px = armed.player.x;
+    py = armed.player.y;
+  }
+  if (armed.stats.drops < 1) throw new Error('观摩 drop trail');
+  if (dist(armed.player.x, armed.player.y, ax, ay) < 20) throw new Error('观摩 should walk');
+  if (maxStep > DASH_SPEED * 0.05 + 8) throw new Error('观摩 no teleport');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+
+  const kite = makeState();
+  resetRoom(kite, 1, false);
+  setWatch(kite, true);
+  kite.player.inv = 2;
+  const k0x = kite.player.x;
+  const k0y = kite.player.y;
+  for (let i = 0; i < 36; i++) update(kite, 0.05);
+  if (kite.stats.drops < 1) throw new Error('观摩 kite trail');
+  if (dist(kite.player.x, kite.player.y, k0x, k0y) < 16) throw new Error('观摩 kite walks');
+
+  const seek = makeState();
+  resetRoom(seek, 0, false);
+  setWatch(seek, true);
+  seek.crates.forEach(function (c) { c.open = true; });
+  seek.items.push({ kind: 'core', x: 400, y: 220, r: 10, taken: false });
+  const sx = seek.player.x;
+  const sy = seek.player.y;
+  const coreD0 = dist(sx, sy, 400, 220);
+  for (let i = 0; i < 30; i++) update(seek, 0.05);
+  const coreD1 = dist(seek.player.x, seek.player.y, 400, 220);
+  if (!seek.won && !seek.items[0].taken && coreD1 >= coreD0 - 8) {
+    throw new Error('观摩 seek 心核');
+  }
+
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
     DASH_TIME: DASH_TIME,
@@ -2156,6 +2460,7 @@ function selfCheck() {
     rooms: ROOMS.map(function (r) { return r.name; }),
     fizzles: wet.stats.fizzles,
     standDrops: still.stats.drops,
+    watch: armed.watch,
   });
 }
 
