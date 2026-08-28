@@ -9,7 +9,7 @@ const VIEW_H = 540;
 const PLAYER_R = 11;
 const PLAYER_SPEED = 178;
 const DASH_SPEED = 520;
-const DASH_TIME = 0.13;
+const DASH_TIME = 0.18;
 const DASH_CD = 0.42;
 const ENEMY_R = 13;
 const ENEMY_SPEED = 48;
@@ -22,7 +22,7 @@ const HOUND_MOUNT = 70;
 const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八'];
 const HEART_MAX = 3;
 const HITSTOP = 0.08;
-const IFRAMES = 0.95;
+const IFRAMES = 0.35;
 const CRATE = 48;
 const NEXT_WAIT = 0.7;
 
@@ -59,6 +59,7 @@ const TOAST = {
   hound: '循辙倒了',
   road: '循辙盯着你的路',
   cut: '水能切断公路',
+  dashSafe: '冲能穿过焰辙',
 };
 
 const COL = {
@@ -231,6 +232,7 @@ function makeState() {
     toastColor: COL.gold,
     stats: { booms: 0, fizzles: 0, drops: 0 },
     time: 0,
+    taughtDash: false,
   };
 }
 
@@ -310,6 +312,10 @@ function resetRoom(s, index, keepHearts) {
   if (room.name === '夜市') toast(s, TOAST.night, 1.1, COL.gold);
   else if (room.name === '循径') toast(s, TOAST.road, 1.1, COL.gold);
   else if (room.name === '双刃') toast(s, TOAST.cut, 1.1, COL.water);
+  else if (room.name === '夹道' && !s.taughtDash) {
+    toast(s, TOAST.dashSafe, 1.4, COL.ember);
+    s.taughtDash = true;
+  }
 }
 
 function isHound(e) {
@@ -467,9 +473,14 @@ function resolveCrates(s, ent) {
   }
 }
 
+function dashIFrame(p) {
+  return p && p.dashT > 0;
+}
+
 function hurtPlayer(s, srcX, srcY, why) {
   const p = s.player;
   if (s.won || s.dead || s.pendingNext > 0 || p.inv > 0) return false;
+  if (dashIFrame(p) && (why === 'blast' || why === 'bump')) return false;
   p.hearts -= 1;
   p.inv = IFRAMES;
   s.flash = 0.22;
@@ -1142,13 +1153,15 @@ function screenToWorld(canvas, cx, cy, s) {
   };
 }
 
+function roomHudText(s) {
+  const n = ensureRooms().length;
+  return (s.roomName || '') + ' · ' + (s.roomIndex + 1) + '/' + n;
+}
+
 function syncHud(s, heartsEl, toastEl, roomEl) {
   heartsEl.textContent = '心×' + s.player.hearts;
   if (roomEl) {
-    const n = ensureRooms().length;
-    const a = CN_NUM[s.roomIndex] || String(s.roomIndex + 1);
-    const b = CN_NUM[n - 1] || String(n);
-    roomEl.textContent = (s.roomName || '') + ' · ' + a + '/' + b;
+    roomEl.textContent = roomHudText(s);
   }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
@@ -1306,6 +1319,59 @@ function selfCheck() {
   explode(own, own.player.x, own.player.y, false);
   if (own.player.hearts !== hp - 1) throw new Error('own blast hurts');
 
+  if (DASH_TIME !== 0.18) throw new Error('DASH_TIME ~0.18');
+  if (IFRAMES !== 0.35) throw new Error('IFRAMES 0.35');
+  if (typeof dashIFrame !== 'function') throw new Error('dash i-frame');
+
+  const dashBlast = makeState();
+  resetRoom(dashBlast, 0, false);
+  dashBlast.player.dashT = DASH_TIME;
+  const dashHp = dashBlast.player.hearts;
+  explode(dashBlast, dashBlast.player.x, dashBlast.player.y, false);
+  if (dashBlast.player.hearts !== dashHp) throw new Error('dash i-frame own blast');
+
+  const dashTouch = makeState();
+  resetRoom(dashTouch, 1, false);
+  dashTouch.player.dashT = DASH_TIME;
+  dashTouch.player.inv = 0;
+  const touchHp = dashTouch.player.hearts;
+  const foe = dashTouch.enemies[0];
+  if (!foe) throw new Error('dash i-frame need enemy');
+  foe.x = dashTouch.player.x;
+  foe.y = dashTouch.player.y;
+  update(dashTouch, 0.016);
+  if (dashTouch.player.hearts !== touchHp) throw new Error('dash i-frame enemy');
+
+  const dashHot = makeState();
+  resetRoom(dashHot, 0, false);
+  dashHot.input.x = 1;
+  dashHot.input.dash = true;
+  for (let i = 0; i < 10; i++) update(dashHot, 0.02);
+  let hotN = 0;
+  for (let i = 0; i < dashHot.sparks.length; i++) {
+    if (dashHot.sparks[i].hot) hotN += 1;
+  }
+  if (hotN < 1) throw new Error('dash still leaves hot sparks');
+
+  const afterDash = makeState();
+  resetRoom(afterDash, 0, false);
+  afterDash.player.dashT = 0;
+  const afterHp = afterDash.player.hearts;
+  explode(afterDash, afterDash.player.x, afterDash.player.y, false);
+  if (afterDash.player.hearts !== afterHp - 1) throw new Error('own blast hurts when not dashing');
+
+  const hitInv = makeState();
+  resetRoom(hitInv, 0, false);
+  hurtPlayer(hitInv, hitInv.player.x + 10, hitInv.player.y, 'bump');
+  if (Math.abs(hitInv.player.inv - 0.35) > 1e-9) throw new Error('hit invuln 0.35s');
+
+  const hud0 = makeState();
+  resetRoom(hud0, 0, false);
+  if (roomHudText(hud0) !== '空场 · 1/8') throw new Error('HUD 空场 1/8');
+  const hud2 = makeState();
+  resetRoom(hud2, 2, false);
+  if (roomHudText(hud2) !== '水巷 · 3/8') throw new Error('HUD 3/8');
+
   const lane = makeState();
   resetRoom(lane, 4, false);
   if (lane.roomName !== '夹道' || lane.roomH !== 140) throw new Error('jiadao load');
@@ -1365,6 +1431,8 @@ function selfCheck() {
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
+    DASH_TIME: DASH_TIME,
+    IFRAMES: IFRAMES,
     rooms: ROOMS.map(function (r) { return r.name; }),
     fizzles: wet.stats.fizzles,
     standDrops: still.stats.drops,
