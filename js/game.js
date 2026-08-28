@@ -54,6 +54,9 @@ const ENEMY_SPEED = 48;
 const ENEMY_HP = 3;
 const SHELL_HP = 2;
 const SHELL_R = 14;
+const BOOMER_HP = 1;
+const BOOMER_R = 13;
+const BOOMER_T = 0.80;
 const HOUND_HP = 2;
 const HOUND_IDLE = 22;
 const HOUND_SEEK = 88;
@@ -115,6 +118,7 @@ const NAMES = {
   spin: '旋爆',
   eater: '拾烬',
   shell: '壳卫',
+  boomer: '爆卫',
 };
 
 const TOAST = {
@@ -219,6 +223,10 @@ const TOAST = {
   shell: '壳卫倒了',
   shellClang: '壳挡了',
   shellRoom: '烫爆才破壳',
+  boomer: '爆卫倒了',
+  boomerPop: '爆卫炸了',
+  boomerFizzle: '爆线熄了',
+  boomerRoom: '倒了还会炸',
 };
 
 const COL = {
@@ -246,6 +254,7 @@ const COL = {
   oil: '#8a4a12',
   eater: '#9a6ab0',
   shell: '#c4a06a',
+  boomer: '#d4ff32',
   core: '#ff5d8f',
   heart: '#ff5d8f',
   ash: '#6b5344',
@@ -553,6 +562,7 @@ function makeState() {
     rolls: [],
     mirrors: [],
     spins: [],
+    boomerFuses: [],
     echoes: [],
     echoing: false,
     splits: [],
@@ -645,6 +655,8 @@ function resetRoom(s, index, keepHearts) {
   s.mirrors.length = 0;
   if (!s.spins) s.spins = [];
   s.spins.length = 0;
+  if (!s.boomerFuses) s.boomerFuses = [];
+  s.boomerFuses.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -706,14 +718,16 @@ function resetRoom(s, index, keepHearts) {
   s.enemies = (room.enemies || []).map(function (e) {
     let kind = e.type || e.kind || NAMES.enemy;
     if (kind === 'shell' || kind === '壳卫') kind = NAMES.shell;
+    if (kind === 'boomer' || kind === '爆卫') kind = NAMES.boomer;
     const hound = kind === NAMES.hound;
     const moth = kind === NAMES.moth;
     const eater = kind === NAMES.eater;
     const shell = kind === NAMES.shell;
+    const boomer = kind === NAMES.boomer;
     return {
       x: e.x, y: e.y,
-      r: shell ? SHELL_R : (moth ? MOTH_R : (eater ? EATER_R : (hound ? 12 : ENEMY_R))),
-      hp: shell ? SHELL_HP : (moth ? MOTH_HP : (eater ? EATER_HP : (hound ? HOUND_HP : ENEMY_HP))),
+      r: boomer ? BOOMER_R : (shell ? SHELL_R : (moth ? MOTH_R : (eater ? EATER_R : (hound ? 12 : ENEMY_R)))),
+      hp: boomer ? BOOMER_HP : (shell ? SHELL_HP : (moth ? MOTH_HP : (eater ? EATER_HP : (hound ? HOUND_HP : ENEMY_HP)))),
       hitT: 0,
       frostT: 0,
       shoveT: 0,
@@ -755,6 +769,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '卷廊') toast(s, TOAST.rollRoom, 1.4, COL.roll);
   else if (room.name === '镜廊') toast(s, TOAST.mirrorRoom, 1.4, COL.mirror);
   else if (room.name === '旋廊') toast(s, TOAST.spinRoom, 1.4, COL.spin);
+  else if (room.name === '爆廊') toast(s, TOAST.boomerRoom, 1.4, COL.boomer);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -775,6 +790,10 @@ function isEater(e) {
 
 function isShell(e) {
   return e.kind === NAMES.shell;
+}
+
+function isBoomer(e) {
+  return e.kind === NAMES.boomer;
 }
 
 function updateMoth(s, e, dt) {
@@ -1044,7 +1063,17 @@ function hurtPlayer(s, srcX, srcY, why) {
 }
 
 function foeDown(s, e) {
-  if (isShell(e)) {
+  if (isBoomer(e)) {
+    burst(s, e.x, e.y, 8, COL.boomer, 140);
+    burst(s, e.x, e.y, 6, COL.gold, 140);
+    toast(s, TOAST.boomer, 1.1, COL.boomer);
+    if (!reducedMotion()) {
+      punch(s, 6);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+    }
+    if (!s.boomerFuses) s.boomerFuses = [];
+    s.boomerFuses.push({ x: e.x, y: e.y, t: BOOMER_T });
+  } else if (isShell(e)) {
     burst(s, e.x, e.y, 8, COL.shell, 140);
     burst(s, e.x, e.y, 6, COL.gold, 140);
     toast(s, TOAST.shell, 1.1, COL.shell);
@@ -1288,6 +1317,34 @@ function updateMirrors(s, dt) {
     if (!reducedMotion()) {
       punch(s, 6);
       burst(s, hx, hy, 5, COL.mirror, 160);
+    }
+  }
+}
+
+function updateBoomerFuses(s, dt) {
+  if (!s.boomerFuses || !s.boomerFuses.length) return;
+  const pops = [];
+  for (let i = s.boomerFuses.length - 1; i >= 0; i--) {
+    const f = s.boomerFuses[i];
+    if (inWater(s, f.x, f.y)) {
+      s.boomerFuses.splice(i, 1);
+      burst(s, f.x, f.y, 4, COL.water, 70);
+      toast(s, TOAST.boomerFizzle, 1.0, COL.water);
+      continue;
+    }
+    f.t -= dt;
+    if (f.t <= 0) {
+      s.boomerFuses.splice(i, 1);
+      pops.push({ x: f.x, y: f.y });
+    }
+  }
+  for (let i = 0; i < pops.length; i++) {
+    const pop = pops[i];
+    explode(s, pop.x, pop.y, true, true, false, { fork: true });
+    toast(s, TOAST.boomerPop, 1.1, COL.boomer);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      burst(s, pop.x, pop.y, 6, COL.boomer, 170);
     }
   }
 }
@@ -2108,6 +2165,17 @@ function nearestSoonBlast(s, x, y, tMax, pad) {
       near = k;
     }
   }
+  const fuses = s.boomerFuses || [];
+  for (let i = 0; i < fuses.length; i++) {
+    const f = fuses[i];
+    if (!(f.t < 0.40)) continue;
+    const r = HOT_BLAST_R + pad;
+    const d = dist(x, y, f.x, f.y);
+    if (d < r && d < nd) {
+      nd = d;
+      near = f;
+    }
+  }
   return near;
 }
 
@@ -2457,6 +2525,7 @@ function update(s, dt) {
     updateRolls(s, dt);
     updateMirrors(s, dt);
     updateSpins(s, dt);
+    updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
   }
@@ -2474,6 +2543,7 @@ function update(s, dt) {
     updateRolls(s, dt);
     updateMirrors(s, dt);
     updateSpins(s, dt);
+    updateBoomerFuses(s, dt);
     return;
   }
 
@@ -2583,6 +2653,7 @@ function update(s, dt) {
   updateRolls(s, dt);
   updateMirrors(s, dt);
   updateSpins(s, dt);
+  updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
@@ -3671,6 +3742,44 @@ function draw(s, ctx) {
     }
   }
 
+  for (let i = 0; i < (s.boomerFuses || []).length; i++) {
+    const fu = s.boomerFuses[i];
+    const life = clamp(fu.t / BOOMER_T, 0, 1);
+    const grown = 1 - life;
+    const pulse = reducedMotion() ? 1 : 0.9 + 0.14 * (0.5 + 0.5 * Math.sin((s.time || 0) * 9));
+    const rad = 9 * pulse;
+    glow(ctx, fu.x, fu.y, rad + 8, COL.boomer, reducedMotion() ? 0.28 : 0.2 + 0.32 * grown);
+    ctx.fillStyle = COL.boomer;
+    ctx.globalAlpha = reducedMotion() ? 0.82 : 0.5 + 0.4 * pulse;
+    ctx.beginPath();
+    ctx.arc(fu.x, fu.y, rad, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = COL.boomer;
+    ctx.lineWidth = 1.8 / fit.scale;
+    if (reducedMotion()) {
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(fu.x, fu.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      const ringR = 10 + grown * (HOT_BLAST_R - 10);
+      ctx.setLineDash([5 / fit.scale, 4 / fit.scale]);
+      ctx.beginPath();
+      ctx.arc(fu.x, fu.y, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.fillStyle = COL.gold;
+    ctx.beginPath();
+    ctx.arc(fu.x, fu.y, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COL.boomer;
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('爆', fu.x, fu.y - 14);
+  }
+
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
@@ -3830,6 +3939,48 @@ function draw(s, ctx) {
         ctx.fillStyle = h < e.hp ? COL.shell : 'rgba(196,160,106,0.2)';
         ctx.fillRect(e.x - 9 + h * 10, e.y + e.r + 14, 8, 3);
       }
+      continue;
+    }
+    if (isBoomer(e)) {
+      const pulse = reducedMotion() ? 1 : (0.9 + 0.1 * Math.sin(s.time * 8 + e.x * 0.02));
+      glow(ctx, e.x, e.y, 22 * pulse, COL.boomer, reducedMotion() ? 0.16 : 0.28);
+      ctx.beginPath();
+      ctx.fillStyle = flash ? COL.gold : '#3a4a10';
+      ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = flash ? COL.gold : COL.boomer;
+      ctx.lineWidth = 2.4 / fit.scale;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.fillStyle = flash ? COL.gold : mixHex('#2a1410', COL.boomer, 0.55);
+      ctx.arc(e.x, e.y, e.r * 0.48, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = flash ? COL.gold : '#8aaa20';
+      ctx.lineWidth = 1.3 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(e.x - 4, e.y - 2);
+      ctx.lineTo(e.x + 1, e.y + 3);
+      ctx.lineTo(e.x + 4, e.y - 1);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        const flick = 0.5 + 0.5 * Math.sin(s.time * 18);
+        glow(ctx, e.x, e.y - e.r - 2, 6, COL.boomer, 0.4 * flick);
+        ctx.beginPath();
+        ctx.fillStyle = flash ? COL.gold : COL.boomer;
+        ctx.arc(e.x, e.y - e.r - 1, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.fillStyle = COL.boomer;
+        ctx.arc(e.x, e.y - e.r - 1, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = COL.boomer;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.boomer, e.x, e.y + e.r + 12);
+      ctx.fillStyle = e.hp > 0 ? COL.boomer : 'rgba(212,255,50,0.2)';
+      ctx.fillRect(e.x - 4, e.y + e.r + 14, 8, 3);
       continue;
     }
     const iced = e.frostT > 0;
@@ -4681,8 +4832,8 @@ function selfCheck() {
   if (SPIN_DT !== 0.14) throw new Error('SPIN_DT 0.14');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 35) throw new Error('need 35 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊'];
+  if (!ROOMS || ROOMS.length !== 36) throw new Error('need 36 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -4742,6 +4893,8 @@ function selfCheck() {
   if (ROOMS[33].name !== '镜廊') throw new Error('room 34 镜廊');
   if (ROOMS[34].id !== 'xuanlang') throw new Error('旋廊 id');
   if (ROOMS[34].name !== '旋廊') throw new Error('room 35 旋廊');
+  if (ROOMS[35].id !== 'baolang') throw new Error('爆廊 id');
+  if (ROOMS[35].name !== '爆廊') throw new Error('room 36 爆廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -4758,6 +4911,11 @@ function selfCheck() {
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
   if (COL.shell !== '#c4a06a') throw new Error('COL.shell');
+  if (BOOMER_HP !== 1) throw new Error('BOOMER_HP 1');
+  if (BOOMER_R !== 13) throw new Error('BOOMER_R 13');
+  if (BOOMER_T !== 0.80) throw new Error('BOOMER_T 0.80');
+  if (NAMES.boomer !== '爆卫') throw new Error('爆卫 name');
+  if (COL.boomer !== '#d4ff32') throw new Error('COL.boomer');
   if (SEED_R !== 72) throw new Error('SEED_R 72');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
@@ -4771,7 +4929,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '壳卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -4810,6 +4968,16 @@ function selfCheck() {
   if (COL.shell !== '#c4a06a') throw new Error('COL.shell');
   if (SHELL_HP !== 2) throw new Error('壳卫 2 HP');
   if (SHELL_R !== 14) throw new Error('SHELL_R');
+  if (NAMES.boomer !== '爆卫') throw new Error('爆卫 name');
+  if (TOAST.boomer !== '爆卫倒了') throw new Error('爆卫倒了');
+  if (TOAST.boomerPop !== '爆卫炸了') throw new Error('爆卫炸了');
+  if (TOAST.boomerFizzle !== '爆线熄了') throw new Error('爆线熄了');
+  if (TOAST.boomerRoom !== '倒了还会炸') throw new Error('倒了还会炸');
+  if (COL.boomer !== '#d4ff32') throw new Error('COL.boomer');
+  if (BOOMER_HP !== 1) throw new Error('爆卫 1 HP');
+  if (BOOMER_R !== 13) throw new Error('BOOMER_R');
+  if (BOOMER_T !== 0.80) throw new Error('BOOMER_T');
+  if (typeof isBoomer !== 'function') throw new Error('isBoomer');
 
   if (typeof setWatch !== 'function' || typeof watchSteer !== 'function') {
     throw new Error('观摩 helpers');
@@ -4822,6 +4990,7 @@ function selfCheck() {
   let mothN = 0;
   let eaterN = 0;
   let shellN = 0;
+  let boomerN = 0;
   for (let r = 0; r < ROOMS.length; r++) {
     const ens = ROOMS[r].enemies || [];
     for (let j = 0; j < ens.length; j++) {
@@ -4830,12 +4999,14 @@ function selfCheck() {
       if (k === '灯蛾') mothN += 1;
       if (k === '拾烬') eaterN += 1;
       if (k === '壳卫' || k === 'shell') shellN += 1;
+      if (k === '爆卫' || k === 'boomer') boomerN += 1;
     }
   }
   if (houndN < 1) throw new Error('循辙 exists');
   if (mothN < 1) throw new Error('灯蛾 exists');
   if (eaterN < 1) throw new Error('拾烬 exists');
   if (shellN < 1) throw new Error('壳卫 exists');
+  if (boomerN < 1) throw new Error('爆卫 exists');
   if (MOTH_SEEK_T !== 1.2) throw new Error('灯蛾 seek 1.2s');
   if (MOTH_HP !== 2) throw new Error('灯蛾 2 HP');
   const scan = blob + NAMES.hint + '尾火过关失败通关循辙倒了' + want.join('');
@@ -4928,10 +5099,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/35') throw new Error('HUD 空场 1/35');
+  if (roomHudText(hud0) !== '空场 · 1/36') throw new Error('HUD 空场 1/36');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/35') throw new Error('HUD 3/35');
+  if (roomHudText(hud2) !== '水巷 · 3/36') throw new Error('HUD 3/36');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -5143,7 +5314,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/35') throw new Error('HUD 灰径 11/35');
+  if (roomHudText(hudAsh) !== '灰径 · 11/36') throw new Error('HUD 灰径 11/36');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -5170,7 +5341,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/35') throw new Error('HUD 环行 12/35');
+  if (roomHudText(hudRing) !== '环行 · 12/36') throw new Error('HUD 环行 12/36');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -5199,7 +5370,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/35') throw new Error('HUD 密线 13/35');
+  if (roomHudText(hudWire) !== '密线 · 13/36') throw new Error('HUD 密线 13/36');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -5515,7 +5686,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/35') throw new Error('HUD 潮廊 14/35');
+  if (roomHudText(hudChao) !== '潮廊 · 14/36') throw new Error('HUD 潮廊 14/36');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -5585,7 +5756,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/35') throw new Error('HUD 种廊 15/35');
+  if (roomHudText(hudZhong) !== '种廊 · 15/36') throw new Error('HUD 种廊 15/36');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -5712,7 +5883,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/35') throw new Error('HUD 油廊 16/35');
+  if (roomHudText(hudYou) !== '油廊 · 16/36') throw new Error('HUD 油廊 16/36');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -5790,7 +5961,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/35') throw new Error('HUD 急廊 17/35');
+  if (roomHudText(hudJi) !== '急廊 · 17/36') throw new Error('HUD 急廊 17/36');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -6049,6 +6220,38 @@ function selfCheck() {
   if (sh.hp !== 0) throw new Error('壳卫 second hot dies');
   if (shellHit.toast !== TOAST.shell) throw new Error('壳卫倒了');
 
+  const boomHit = makeState();
+  resetRoom(boomHit, 0, false);
+  boomHit.player.x = 40;
+  boomHit.player.y = 40;
+  boomHit.player.inv = 2;
+  boomHit.enemies.push({
+    x: 400, y: 200, r: BOOMER_R, hp: BOOMER_HP, hitT: 0,
+    frostT: 0, shoveT: 0, shoveVx: 0, shoveVy: 0,
+    kind: NAMES.boomer, faceX: 1, faceY: 0, flutter: 0,
+  });
+  const bm = boomHit.enemies[boomHit.enemies.length - 1];
+  explode(boomHit, 400, 200, false);
+  if (bm.hp !== 0) throw new Error('爆卫 dry boom kills');
+  if (boomHit.toast !== TOAST.boomer) throw new Error('爆卫倒了');
+  if (!boomHit.boomerFuses || boomHit.boomerFuses.length !== 1) throw new Error('fuse queued');
+  if (dist(boomHit.boomerFuses[0].x, boomHit.boomerFuses[0].y, 400, 200) > 30) {
+    throw new Error('fuse at corpse');
+  }
+  if (Math.abs(boomHit.boomerFuses[0].t - BOOMER_T) > 0.05) throw new Error('fuse t is BOOMER_T');
+  const boomBooms = boomHit.stats.booms;
+  boomHit.player.x = 400;
+  boomHit.player.y = 200;
+  boomHit.player.inv = 0;
+  boomHit.player.hearts = 3;
+  boomHit.hitstop = 0;
+  boomHit.embers.length = 0;
+  updateBoomerFuses(boomHit, BOOMER_T + 0.05);
+  if (boomHit.boomerFuses.length !== 0) throw new Error('fuse cooked off');
+  if (!(boomHit.stats.booms > boomBooms)) throw new Error('corpse hot boom');
+  if (boomHit.player.hearts >= 3) throw new Error('corpse boom hurts player');
+  if (boomHit.toast !== TOAST.boomerPop) throw new Error('爆卫炸了');
+
   const shi = makeState();
   resetRoom(shi, 17, false);
   if (shi.roomName !== '拾廊' || shi.roomId !== 'shilang') throw new Error('shilang load');
@@ -6133,7 +6336,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/35') throw new Error('HUD 拾廊 18/35');
+  if (roomHudText(hudShi) !== '拾廊 · 18/36') throw new Error('HUD 拾廊 18/36');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -6405,7 +6608,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/35') throw new Error('HUD 响廊 19/35');
+  if (roomHudText(hudXiang) !== '响廊 · 19/36') throw new Error('HUD 响廊 19/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -6597,7 +6800,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/35') throw new Error('HUD 吸廊 20/35');
+  if (roomHudText(hudXi) !== '吸廊 · 20/36') throw new Error('HUD 吸廊 20/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -6818,7 +7021,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/35') throw new Error('HUD 冲廊 21/35');
+  if (roomHudText(hudChong) !== '冲廊 · 21/36') throw new Error('HUD 冲廊 21/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -7060,7 +7263,7 @@ function selfCheck() {
   if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/35') throw new Error('HUD 裂廊 22/35');
+  if (roomHudText(hudLie) !== '裂廊 · 22/36') throw new Error('HUD 裂廊 22/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -7340,10 +7543,10 @@ function selfCheck() {
   if (guan.roomName !== '晕廊') throw new Error('core advances to 晕廊');
   const hudGuan = makeState();
   resetRoom(hudGuan, 22, false);
-  if (roomHudText(hudGuan) !== '贯廊 · 23/35') throw new Error('HUD 贯廊 23/35');
+  if (roomHudText(hudGuan) !== '贯廊 · 23/36') throw new Error('HUD 贯廊 23/36');
   const hudChong23 = makeState();
   resetRoom(hudChong23, 20, false);
-  if (roomHudText(hudChong23) !== '冲廊 · 21/35') throw new Error('HUD 冲廊 21/35');
+  if (roomHudText(hudChong23) !== '冲廊 · 21/36') throw new Error('HUD 冲廊 21/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
@@ -8993,10 +9196,10 @@ function selfCheck() {
   if (yun.roomName !== '冻廊') throw new Error('core advances to 冻廊');
   const hudYun = makeState();
   resetRoom(hudYun, 23, false);
-  if (roomHudText(hudYun) !== '晕廊 · 24/35') throw new Error('HUD 晕廊 24/35');
+  if (roomHudText(hudYun) !== '晕廊 · 24/36') throw new Error('HUD 晕廊 24/36');
   const hudLie24 = makeState();
   resetRoom(hudLie24, 21, false);
-  if (roomHudText(hudLie24) !== '裂廊 · 22/35') throw new Error('HUD 裂廊 22/35');
+  if (roomHudText(hudLie24) !== '裂廊 · 22/36') throw new Error('HUD 裂廊 22/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
@@ -9136,7 +9339,7 @@ function selfCheck() {
   if (dong.roomName !== '推廊') throw new Error('core advances to 推廊');
   const hudDong = makeState();
   resetRoom(hudDong, 24, false);
-  if (roomHudText(hudDong) !== '冻廊 · 25/35') throw new Error('HUD 冻廊 25/35');
+  if (roomHudText(hudDong) !== '冻廊 · 25/36') throw new Error('HUD 冻廊 25/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
@@ -9291,7 +9494,7 @@ function selfCheck() {
   if (tui.roomName !== '诱廊') throw new Error('core advances to 诱廊');
   const hudTui = makeState();
   resetRoom(hudTui, 25, false);
-  if (roomHudText(hudTui) !== '推廊 · 26/35') throw new Error('HUD 推廊 26/35');
+  if (roomHudText(hudTui) !== '推廊 · 26/36') throw new Error('HUD 推廊 26/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHOVE_V !== 280) throw new Error('SHOVE_V 280');
@@ -9441,7 +9644,7 @@ function selfCheck() {
   if (yin.roomName !== '壳廊') throw new Error('core advances to 壳廊');
   const hudYin = makeState();
   resetRoom(hudYin, 26, false);
-  if (roomHudText(hudYin) !== '诱廊 · 27/35') throw new Error('HUD 诱廊 27/35');
+  if (roomHudText(hudYin) !== '诱廊 · 27/36') throw new Error('HUD 诱廊 27/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
@@ -9560,7 +9763,7 @@ function selfCheck() {
   if (qiao.roomName !== '雷廊') throw new Error('core advances to 雷廊');
   const hudQiao = makeState();
   resetRoom(hudQiao, 27, false);
-  if (roomHudText(hudQiao) !== '壳廊 · 28/35') throw new Error('HUD 壳廊 28/35');
+  if (roomHudText(hudQiao) !== '壳廊 · 28/36') throw new Error('HUD 壳廊 28/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
@@ -9735,7 +9938,7 @@ function selfCheck() {
   if (lei.roomName !== '绊廊') throw new Error('core advances to 绊廊');
   const hudLei = makeState();
   resetRoom(hudLei, 28, false);
-  if (roomHudText(hudLei) !== '雷廊 · 29/35') throw new Error('HUD 雷廊 29/35');
+  if (roomHudText(hudLei) !== '雷廊 · 29/36') throw new Error('HUD 雷廊 29/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BOLT_R !== 170) throw new Error('BOLT_R 170');
@@ -9923,7 +10126,7 @@ function selfCheck() {
   if (ban.roomName !== '迟廊') throw new Error('core advances to 迟廊');
   const hudBan = makeState();
   resetRoom(hudBan, 29, false);
-  if (roomHudText(hudBan) !== '绊廊 · 30/35') throw new Error('HUD 绊廊 30/35');
+  if (roomHudText(hudBan) !== '绊廊 · 30/36') throw new Error('HUD 绊廊 30/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (TRIP_R !== 16) throw new Error('TRIP_R 16');
@@ -10130,7 +10333,7 @@ function selfCheck() {
   if (chi.roomName !== '跳廊') throw new Error('core advances to 跳廊');
   const hudChi = makeState();
   resetRoom(hudChi, 30, false);
-  if (roomHudText(hudChi) !== '迟廊 · 31/35') throw new Error('HUD 迟廊 31/35');
+  if (roomHudText(hudChi) !== '迟廊 · 31/36') throw new Error('HUD 迟廊 31/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (DELAY_T !== 1.2) throw new Error('DELAY_T 1.2');
@@ -10296,7 +10499,7 @@ function selfCheck() {
   if (tiao.roomName !== '卷廊') throw new Error('core advances to 卷廊');
   const hudTiao = makeState();
   resetRoom(hudTiao, 31, false);
-  if (roomHudText(hudTiao) !== '跳廊 · 32/35') throw new Error('HUD 跳廊 32/35');
+  if (roomHudText(hudTiao) !== '跳廊 · 32/36') throw new Error('HUD 跳廊 32/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BOUNCE_R !== 150) throw new Error('BOUNCE_R 150');
@@ -10478,7 +10681,7 @@ function selfCheck() {
   if (juan.roomName !== '镜廊') throw new Error('core advances to 镜廊');
   const hudJuan = makeState();
   resetRoom(hudJuan, 32, false);
-  if (roomHudText(hudJuan) !== '卷廊 · 33/35') throw new Error('HUD 卷廊 33/35');
+  if (roomHudText(hudJuan) !== '卷廊 · 33/36') throw new Error('HUD 卷廊 33/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (ROLL_N !== 3) throw new Error('ROLL_N 3');
@@ -10677,7 +10880,7 @@ function selfCheck() {
   if (jing.roomName !== '旋廊') throw new Error('core advances to 旋廊');
   const hudJing = makeState();
   resetRoom(hudJing, 33, false);
-  if (roomHudText(hudJing) !== '镜廊 · 34/35') throw new Error('HUD 镜廊 34/35');
+  if (roomHudText(hudJing) !== '镜廊 · 34/36') throw new Error('HUD 镜廊 34/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (MIRROR_DT !== 0.14) throw new Error('MIRROR_DT 0.14');
@@ -10892,10 +11095,12 @@ function selfCheck() {
   explode(xuan, xuanBox.x + xuanBox.w * 0.5, xuanBox.y - 20, false);
   if (!xuanBox.open) throw new Error('旋廊 dry trail should open 心核');
   takeCore(xuan, { x: 100, y: 100 });
-  if (!xuan.won || xuan.toast !== TOAST.all) throw new Error('旋廊 should 通关');
+  if (xuan.won) throw new Error('旋廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(xuan, 0.1);
+  if (xuan.roomName !== '爆廊') throw new Error('core advances to 爆廊');
   const hudXuan = makeState();
   resetRoom(hudXuan, 34, false);
-  if (roomHudText(hudXuan) !== '旋廊 · 35/35') throw new Error('HUD 旋廊 35/35');
+  if (roomHudText(hudXuan) !== '旋廊 · 35/36') throw new Error('HUD 旋廊 35/36');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SPIN_N !== 4) throw new Error('SPIN_N 4');
@@ -10906,6 +11111,143 @@ function selfCheck() {
   if (TOAST.spinGet !== '捡到旋爆') throw new Error('捡到旋爆');
   if (TOAST.spinUse !== '旋出去了') throw new Error('旋出去了 toast');
   if (TOAST.spinRoom !== '围着清场') throw new Error('围着清场');
+
+  const bao = makeState();
+  resetRoom(bao, 35, false);
+  if (bao.roomName !== '爆廊' || bao.roomId !== 'baolang') throw new Error('baolang load');
+  if (bao.toast !== TOAST.boomerRoom) throw new Error('爆廊 intro');
+  if (bao.roomW !== 960 || bao.roomH !== 400) throw new Error('爆廊 size');
+  if (bao.player.x !== 80 || bao.player.y !== 200) throw new Error('爆廊 spawn');
+  if (bao.boomerFuses && bao.boomerFuses.length) throw new Error('爆廊 fuses start empty');
+  let baoStill = 0;
+  let baoTide = 0;
+  for (let i = 0; i < bao.waters.length; i++) {
+    if (bao.waters[i].tide) baoTide += 1;
+    else baoStill += 1;
+  }
+  if (baoStill < 1) throw new Error('爆廊 needs static 水洼');
+  if (baoTide) throw new Error('爆廊 no tide');
+  let baoCore = 0;
+  let baoHeal = 0;
+  let baoThick = 0;
+  for (let i = 0; i < bao.crates.length; i++) {
+    if (bao.crates[i].loot === 'core') baoCore += 1;
+    if (bao.crates[i].loot === 'heal') baoHeal += 1;
+    if (bao.crates[i].thick) baoThick += 1;
+  }
+  if (bao.items && bao.items.length) throw new Error('爆廊 no ground pickup');
+  if (baoCore !== 1) throw new Error('爆廊 心核');
+  if (baoHeal < 1) throw new Error('爆廊 回星');
+  const baoBox = bao.crates.find(function (c) { return c.loot === 'core'; });
+  if (!baoBox || baoBox.thick) throw new Error('爆廊 心核 crate is not thick');
+  if (baoThick) throw new Error('爆廊 no thick crate');
+  let baoHound = 0;
+  let baoGuard = 0;
+  let baoMoth = 0;
+  let baoEater = 0;
+  let baoShell = 0;
+  let baoBoomer = 0;
+  for (let i = 0; i < bao.enemies.length; i++) {
+    if (isHound(bao.enemies[i])) baoHound += 1;
+    else if (isMoth(bao.enemies[i])) baoMoth += 1;
+    else if (isEater(bao.enemies[i])) baoEater += 1;
+    else if (isShell(bao.enemies[i])) baoShell += 1;
+    else if (isBoomer(bao.enemies[i])) baoBoomer += 1;
+    else baoGuard += 1;
+  }
+  if (baoBoomer !== 2 || baoGuard !== 0 || baoHound !== 0 || baoMoth !== 0 || baoEater !== 0 || baoShell !== 0) {
+    throw new Error('爆廊 爆卫 only');
+  }
+  if (bao.enemies[0].hp !== BOOMER_HP || bao.enemies[1].hp !== BOOMER_HP) {
+    throw new Error('爆廊 爆卫 hp');
+  }
+  if (bao.enemies[0].r !== BOOMER_R || bao.enemies[1].r !== BOOMER_R) {
+    throw new Error('爆廊 爆卫 r');
+  }
+  if (inWater(bao, 80, 200) || inOil(bao, 80, 200)) throw new Error('爆廊 spawn dry');
+  if (inOil(bao, 860, 188) || inWater(bao, 860, 188)) throw new Error('爆廊 core dry');
+  if (inWater(bao, 500, 200) || inOil(bao, 500, 200)) throw new Error('爆廊 爆卫 dry');
+  if (inWater(bao, 545, 200) || inOil(bao, 545, 200)) throw new Error('爆廊 爆卫 dry lane');
+  if (inWater(bao, 522, 200) || inOil(bao, 522, 200)) throw new Error('爆廊 plant dry');
+  if (!inWater(bao, 450, 350)) throw new Error('爆廊 wet bag');
+  if (inWater(bao, 400, 100)) throw new Error('爆廊 north shelf wet');
+  for (let i = 0; i < bao.crates.length; i++) {
+    const c = bao.crates[i];
+    if (circleRect(bao.player.x, bao.player.y, bao.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('爆廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 460; x += 10) {
+    for (let i = 0; i < bao.crates.length; i++) {
+      const c = bao.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('爆廊 crate on dry walk');
+      }
+    }
+  }
+  for (let i = 0; i < bao.enemies.length; i++) {
+    const e = bao.enemies[i];
+    if (dist(e.x, e.y, 80, 200) < 80) throw new Error('爆廊 foe too close to spawn');
+    if (!(dist(e.x, e.y, 522, 200) <= BLAST_R + BOOMER_R)) {
+      throw new Error('爆廊 爆卫 inside plant blast');
+    }
+  }
+  const baoW = bao.enemies.find(function (e) { return Math.abs(e.x - 500) < 1 && Math.abs(e.y - 200) < 1; });
+  const baoE = bao.enemies.find(function (e) { return Math.abs(e.x - 545) < 1 && Math.abs(e.y - 200) < 1; });
+  if (!baoW || !baoE) throw new Error('爆廊 pair 爆卫');
+  const baoCoreCx = baoBox.x + baoBox.w * 0.5;
+  const baoCoreCy = baoBox.y + baoBox.h * 0.5;
+  if (!(dist(baoCoreCx, baoCoreCy, 545, 200) > HOT_BLAST_R)) throw new Error('爆廊 core outside corpse blast');
+  bao.player.x = 80;
+  bao.player.y = 80;
+  bao.player.hearts = 3;
+  bao.player.inv = 2;
+  bao.hitstop = 0;
+  bao.embers.length = 0;
+  const baoFuse0 = (bao.boomerFuses || []).length;
+  explode(bao, 80, 80, false, false, false, { fork: true });
+  if ((bao.boomerFuses || []).length !== baoFuse0) throw new Error('fork explode does not queue fuse');
+  if (baoW.hp !== BOOMER_HP || baoE.hp !== BOOMER_HP) throw new Error('fork miss keeps 爆卫');
+  bao.hitstop = 0;
+  bao.embers.length = 0;
+  explode(bao, 522, 200, false);
+  if (baoW.hp !== 0 || baoE.hp !== 0) throw new Error('dry explode drops both 爆卫');
+  if (bao.toast !== TOAST.boomer) throw new Error('爆卫倒了 room');
+  if (!bao.boomerFuses || bao.boomerFuses.length !== 2) throw new Error('two fuses queued');
+  bao.player.x = 80;
+  bao.player.y = 80;
+  bao.player.inv = 2;
+  bao.hitstop = 0;
+  const baoBooms = bao.stats.booms;
+  updateBoomerFuses(bao, BOOMER_T + 0.05);
+  if (bao.boomerFuses.length !== 0) throw new Error('爆廊 fuses fire');
+  if (!(bao.stats.booms > baoBooms)) throw new Error('爆廊 corpse hot boom');
+  if (bao.toast !== TOAST.boomerPop) throw new Error('爆卫炸了 room');
+  const baoBooms2 = bao.stats.booms;
+  bao.boomerFuses.push({ x: 470, y: 350, t: BOOMER_T });
+  updateBoomerFuses(bao, 0.05);
+  if (bao.boomerFuses.length !== 0) throw new Error('爆廊 puddle fizzle');
+  if (bao.stats.booms !== baoBooms2) throw new Error('wet fuse no extra boom');
+  if (bao.toast !== TOAST.boomerFizzle) throw new Error('爆线熄了 room');
+  bao.waters = [];
+  explode(bao, baoBox.x + baoBox.w * 0.5, baoBox.y - 20, false);
+  if (!baoBox.open) throw new Error('爆廊 dry trail should open 心核');
+  takeCore(bao, { x: 100, y: 100 });
+  if (!bao.won || bao.toast !== TOAST.all) throw new Error('爆廊 should 通关');
+  const hudBao = makeState();
+  resetRoom(hudBao, 35, false);
+  if (roomHudText(hudBao) !== '爆廊 · 36/36') throw new Error('HUD 爆廊 36/36');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (BOOMER_HP !== 1) throw new Error('BOOMER_HP 1');
+  if (BOOMER_R !== 13) throw new Error('BOOMER_R 13');
+  if (BOOMER_T !== 0.80) throw new Error('BOOMER_T 0.80');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.boomer !== '爆卫倒了') throw new Error('爆卫倒了 toast');
+  if (TOAST.boomerPop !== '爆卫炸了') throw new Error('爆卫炸了 toast');
+  if (TOAST.boomerFizzle !== '爆线熄了') throw new Error('爆线熄了 toast');
+  if (TOAST.boomerRoom !== '倒了还会炸') throw new Error('倒了还会炸');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
