@@ -191,7 +191,8 @@ html, body {
   color: var(--gold);
 }
 
-#combo {
+#combo,
+#seed {
   display: block;
   margin-top: 4px;
   min-height: 1em;

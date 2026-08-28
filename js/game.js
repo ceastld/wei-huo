@@ -6,6 +6,7 @@ const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
 const BLAST_R = 36;
 const HOT_BLAST_R = 56;
+const SEED_R = 72;
 const CHAIN_T = 0.12;
 const COMBO_MIN = 3;
 const EMBER_T = 0.55;
@@ -55,6 +56,7 @@ const NAMES = {
   scorch: '焦痕',
   hint: '跑过的路两秒后会爆',
   watch: '观摩',
+  seed: '焰种',
 };
 
 const TOAST = {
@@ -92,6 +94,9 @@ const TOAST = {
   tideOn: '潮来了',
   tideOff: '潮退了',
   tide: '潮会熄辙',
+  seed: '焰种放大下一爆',
+  seedGet: '捡到焰种',
+  seedBoom: '焰种爆了',
 };
 
 const COL = {
@@ -271,6 +276,7 @@ function comboText(n) {
 function lootKind(drop) {
   if (drop === '心核' || drop === 'core') return 'core';
   if (drop === '回星' || drop === 'heal') return 'heal';
+  if (drop === '焰种' || drop === 'seed') return 'seed';
   return null;
 }
 
@@ -317,6 +323,7 @@ function makeState() {
     burstN: 0,
     burstWait: 0,
     lastCombo: 0,
+    seed: 0,
     watch: false,
     watchSide: 1,
     watchStuckT: 0,
@@ -334,7 +341,7 @@ function resetRoom(s, index, keepHearts) {
   if (ROOMS.length && index >= ROOMS.length) index = ROOMS.length - 1;
   const room = ROOMS[index] || {
     id: '', name: '', w: VIEW_W, h: VIEW_H,
-    spawn: { x: 110, y: 310 }, puddles: [], crates: [], enemies: [],
+    spawn: { x: 110, y: 310 }, puddles: [], crates: [], enemies: [], items: [],
   };
   const hearts = keepHearts ? s.player.hearts : HEART_MAX;
   const sp = roomSpawn(room);
@@ -355,6 +362,7 @@ function resetRoom(s, index, keepHearts) {
   s.player.hearts = hearts;
   s.lastSparkX = s.player.x;
   s.lastSparkY = s.player.y;
+  s.seed = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -395,8 +403,18 @@ function resetRoom(s, index, keepHearts) {
       h: CRATE,
       open: false,
       loot: lootKind(c.drop),
+      thick: !!c.thick,
     };
   });
+  s.items = (room.items || []).map(function (it) {
+    return {
+      kind: lootKind(it.kind) || lootKind(it.drop),
+      x: it.x,
+      y: it.y,
+      r: 10,
+      taken: false,
+    };
+  }).filter(function (it) { return it.kind; });
   s.enemies = (room.enemies || []).map(function (e) {
     const kind = e.type || e.kind || NAMES.enemy;
     const hound = kind === NAMES.hound;
@@ -421,6 +439,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '环行') toast(s, TOAST.ring, 1.4, COL.gold);
   else if (room.name === '密线') toast(s, TOAST.wire, 1.4, COL.gold);
   else if (room.name === '潮廊') toast(s, TOAST.tide, 1.4, COL.water);
+  else if (room.name === '种廊') toast(s, TOAST.seed, 1.4, COL.gold);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -707,14 +726,19 @@ function updateEmbers(s, dt, canHurt) {
 }
 
 function explode(s, x, y, hot, fused) {
-  const r = hot ? HOT_BLAST_R : BLAST_R;
+  const seeded = !!s.seed;
+  if (seeded) {
+    s.seed = 0;
+    hot = true;
+  }
+  const r = seeded ? SEED_R : (hot ? HOT_BLAST_R : BLAST_R);
   s.stats.booms += 1;
   s.lastBoomX = x;
   s.lastBoomY = y;
   s.boomSeekT = MOTH_SEEK_T;
   spawnEmber(s, x, y, r, hot);
   spawnScorch(s, x, y, r, hot);
-  burst(s, x, y, hot ? 16 : 10, hot ? COL.gold : COL.ember, hot ? 220 : 170);
+  burst(s, x, y, seeded ? 22 : (hot ? 16 : 10), hot ? COL.gold : COL.ember, hot ? 220 : 170);
   addRing(s, x, y, r, hot);
   sfx('boom');
 
@@ -747,6 +771,7 @@ function explode(s, x, y, hot, fused) {
   for (let i = 0; i < s.crates.length; i++) {
     const c = s.crates[i];
     if (c.open) continue;
+    if (c.thick && !seeded) continue;
     if (circleRect(x, y, r, c.x, c.y, c.w, c.h)) {
       c.open = true;
       hit = true;
@@ -786,6 +811,11 @@ function explode(s, x, y, hot, fused) {
 
   if (hit) punch(s, 6);
   else punch(s, 2);
+  if (seeded) {
+    toast(s, TOAST.seedBoom, 1.1, COL.gold);
+    s.hitstop = Math.max(s.hitstop, hitstopAmt());
+    punch(s, 10);
+  }
   noteBoom(s, chained, !!fused);
 }
 
@@ -964,10 +994,14 @@ function watchSteer(s, dt) {
   let stand = false;
 
   let core = null;
+  let seedIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
-    if (!it.taken && it.kind === 'core') core = it;
+    if (it.taken) continue;
+    if (it.kind === 'core') core = it;
+    if (it.kind === 'seed') seedIt = it;
   }
+  const grab = core || (!s.seed && seedIt);
 
   let guard = null;
   let gd = 1e9;
@@ -1006,6 +1040,10 @@ function watchSteer(s, dt) {
     tx = core.x - p.x;
     ty = core.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.seed && seedIt) {
+    tx = seedIt.x - p.x;
+    ty = seedIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && gd < 150) {
     const orbit = circleAim(p.x, p.y, guard.x, guard.y, 128, side);
     tx = orbit.x;
@@ -1042,7 +1080,7 @@ function watchSteer(s, dt) {
     if (p.dashT <= 0 && p.dashCd <= 0) dash = true;
   }
 
-  if (!core) {
+  if (!grab) {
     let ember = null;
     for (let i = 0; i < s.embers.length; i++) {
       const em = s.embers[i];
@@ -1059,7 +1097,7 @@ function watchSteer(s, dt) {
   const nl0 = Math.hypot(tx, ty) || 1;
   const nx = p.x + (tx / nl0) * look;
   const ny = p.y + (ty / nl0) * look;
-  if (!core && !stand && inWater(s, nx, ny)) {
+  if (!grab && !stand && inWater(s, nx, ny)) {
     const px = -ty;
     const py = tx;
     const pl = Math.hypot(px, py) || 1;
@@ -1250,7 +1288,14 @@ function update(s, dt) {
     if (dist(it.x, it.y, p.x, p.y) > it.r + p.r) continue;
     it.taken = true;
     if (it.kind === 'core') takeCore(s, it);
-    else if (it.kind === 'heal') {
+    else if (it.kind === 'seed') {
+      s.seed = 1;
+      toast(s, TOAST.seedGet, 1.1, COL.gold);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.gold, 130);
+      burst(s, it.x, it.y, 4, COL.ember, 110);
+      punch(s, 3);
+    } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
       toast(s, TOAST.heal, 1.1, COL.heart);
       sfx('heal');
@@ -1363,12 +1408,17 @@ function draw(s, ctx) {
       ctx.strokeRect(c.x + 4, c.y + 4, c.w - 8, c.h - 8);
       continue;
     }
-    ctx.fillStyle = '#3a2218';
+    ctx.fillStyle = c.thick ? '#1c100c' : '#3a2218';
     ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = COL.gold;
-    ctx.lineWidth = 1.5 / fit.scale;
+    ctx.strokeStyle = c.thick ? '#c48a18' : COL.gold;
+    ctx.lineWidth = (c.thick ? 3.2 : 1.5) / fit.scale;
     ctx.strokeRect(c.x + 1, c.y + 1, c.w - 2, c.h - 2);
-    ctx.fillStyle = COL.gold;
+    if (c.thick) {
+      ctx.strokeStyle = '#6a3a12';
+      ctx.lineWidth = 2 / fit.scale;
+      ctx.strokeRect(c.x + 5, c.y + 5, c.w - 10, c.h - 10);
+    }
+    ctx.fillStyle = c.thick ? '#e0b040' : COL.gold;
     ctx.font = '13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(NAMES.crate, c.x + c.w / 2, c.y + c.h / 2 + 4);
@@ -1474,6 +1524,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.core, it.x, it.y - 16);
+    } else if (it.kind === 'seed') {
+      glow(ctx, it.x, it.y, 20 * pulse, COL.gold, 0.65);
+      glow(ctx, it.x, it.y, 10, COL.ember, 0.4);
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.ember;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.seed, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -1588,6 +1653,27 @@ function draw(s, ctx) {
     ctx.beginPath();
     ctx.fillStyle = COL.ember;
     ctx.arc(p.x + p.faceX * 3, p.y + p.faceY * 3, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (s.seed) {
+    let ox;
+    let oy;
+    if (reducedMotion()) {
+      ox = p.x + 10;
+      oy = p.y - 8;
+    } else {
+      const a = s.time * 5.2;
+      ox = p.x + Math.cos(a) * 16;
+      oy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, ox, oy, 8, COL.gold, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(ox, oy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.ember;
+    ctx.arc(ox, oy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -1764,6 +1850,12 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   if (comboEl) {
     comboEl.textContent = s.lastCombo >= COMBO_MIN ? comboText(s.lastCombo) : '';
   }
+  const seedEl = (typeof document !== 'undefined') ? document.getElementById('seed') : null;
+  if (seedEl) {
+    seedEl.textContent = s.seed ? NAMES.seed : '';
+  } else if (comboEl && s.lastCombo < COMBO_MIN) {
+    comboEl.textContent = s.seed ? NAMES.seed : '';
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -1846,8 +1938,8 @@ function selfCheck() {
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 14) throw new Error('need 14 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊'];
+  if (!ROOMS || ROOMS.length !== 15) throw new Error('need 15 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -1865,6 +1957,11 @@ function selfCheck() {
   if (ROOMS[12].name !== '密线') throw new Error('room 13 密线');
   if (ROOMS[13].id !== 'chaolang') throw new Error('潮廊 id');
   if (ROOMS[13].name !== '潮廊') throw new Error('room 14 潮廊');
+  if (ROOMS[14].id !== 'zhonglang') throw new Error('种廊 id');
+  if (ROOMS[14].name !== '种廊') throw new Error('room 15 种廊');
+  if (SEED_R !== 72) throw new Error('SEED_R 72');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
 
   const fitJ = roomFit({ roomW: 960, roomH: 140 });
   if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
@@ -1874,7 +1971,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -2003,10 +2100,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/14') throw new Error('HUD 空场 1/14');
+  if (roomHudText(hud0) !== '空场 · 1/15') throw new Error('HUD 空场 1/15');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/14') throw new Error('HUD 3/14');
+  if (roomHudText(hud2) !== '水巷 · 3/15') throw new Error('HUD 3/15');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -2218,7 +2315,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/14') throw new Error('HUD 灰径 11/14');
+  if (roomHudText(hudAsh) !== '灰径 · 11/15') throw new Error('HUD 灰径 11/15');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -2245,7 +2342,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/14') throw new Error('HUD 环行 12/14');
+  if (roomHudText(hudRing) !== '环行 · 12/15') throw new Error('HUD 环行 12/15');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -2274,7 +2371,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/14') throw new Error('HUD 密线 13/14');
+  if (roomHudText(hudWire) !== '密线 · 13/15') throw new Error('HUD 密线 13/15');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -2585,10 +2682,141 @@ function selfCheck() {
   explode(chao, chaoBox.x + chaoBox.w * 0.5, chaoBox.y - 20, false);
   if (!chaoBox.open) throw new Error('潮廊 dry trail should open 心核');
   takeCore(chao, { x: 100, y: 100 });
-  if (!chao.won || chao.toast !== TOAST.all) throw new Error('潮廊 should 通关');
+  if (chao.won) throw new Error('潮廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(chao, 0.1);
+  if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/14') throw new Error('HUD 潮廊 14/14');
+  if (roomHudText(hudChao) !== '潮廊 · 14/15') throw new Error('HUD 潮廊 14/15');
+
+  if (NAMES.seed !== '焰种') throw new Error('焰种 name');
+  if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
+  if (TOAST.seedGet !== '捡到焰种') throw new Error('捡到焰种');
+  if (TOAST.seedBoom !== '焰种爆了') throw new Error('焰种爆了');
+  if (lootKind('焰种') !== 'seed' || lootKind('seed') !== 'seed') throw new Error('lootKind 焰种');
+
+  const zhong = makeState();
+  resetRoom(zhong, 14, false);
+  if (zhong.roomName !== '种廊' || zhong.roomId !== 'zhonglang') throw new Error('zhonglang load');
+  if (zhong.toast !== TOAST.seed) throw new Error('种廊 intro');
+  if (zhong.roomW !== 960 || zhong.roomH !== 360) throw new Error('种廊 size');
+  if (zhong.player.x !== 80 || zhong.player.y !== 180) throw new Error('种廊 spawn');
+  if (zhong.seed !== 0) throw new Error('种廊 seed starts 0');
+  let zhongCore = 0;
+  let zhongHeal = 0;
+  let zhongThick = 0;
+  for (let i = 0; i < zhong.crates.length; i++) {
+    if (zhong.crates[i].loot === 'core') zhongCore += 1;
+    if (zhong.crates[i].loot === 'heal') zhongHeal += 1;
+    if (zhong.crates[i].thick) zhongThick += 1;
+  }
+  if (zhongCore !== 1) throw new Error('种廊 心核');
+  if (zhongHeal < 1) throw new Error('种廊 回星');
+  const zBox = zhong.crates.find(function (c) { return c.loot === 'core'; });
+  if (!zBox || !zBox.thick) throw new Error('种廊 心核 crate is thick');
+  if (zhongThick !== 1) throw new Error('种廊 one thick crate');
+  const zSeed = zhong.items.find(function (it) { return it.kind === 'seed' && !it.taken; });
+  if (!zSeed) throw new Error('种廊 ground 焰种');
+  let zhongHound = 0;
+  let zhongGuard = 0;
+  for (let i = 0; i < zhong.enemies.length; i++) {
+    if (isHound(zhong.enemies[i])) zhongHound += 1;
+    else zhongGuard += 1;
+  }
+  if (zhongGuard !== 1 || zhongHound !== 1) throw new Error('种廊 烬卫/循辙');
+  if (!zhong.waters.length) throw new Error('种廊 needs 水洼');
+  for (let i = 0; i < zhong.crates.length; i++) {
+    const c = zhong.crates[i];
+    if (circleRect(zhong.player.x, zhong.player.y, zhong.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('种廊 crate on spawn');
+    }
+  }
+  if (inWater(zhong, 80, 180) || inWater(zhong, 340, 180) || inWater(zhong, 860, 180)) {
+    throw new Error('种廊 walk line wet');
+  }
+  for (let x = 80; x < 800; x += 10) {
+    for (let i = 0; i < zhong.crates.length; i++) {
+      const c = zhong.crates[i];
+      if (circleRect(x, 180, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('种廊 crate on dry walk');
+      }
+    }
+  }
+  explode(zhong, zBox.x + zBox.w * 0.5, zBox.y - 20, false);
+  if (zBox.open) throw new Error('种廊 thick stays closed');
+  zhong.seed = 1;
+  explode(zhong, zBox.x + zBox.w * 0.5, zBox.y - 20, false);
+  if (!zBox.open) throw new Error('种廊 seeded opens thick');
+  if (zhong.seed !== 0) throw new Error('种廊 seed consumed');
+  takeCore(zhong, { x: 100, y: 100 });
+  if (!zhong.won || zhong.toast !== TOAST.all) throw new Error('种廊 should 通关');
+  const hudZhong = makeState();
+  resetRoom(hudZhong, 14, false);
+  if (roomHudText(hudZhong) !== '种廊 · 15/15') throw new Error('HUD 种廊 15/15');
+
+  for (let r = 0; r < 14; r++) {
+    const old = ROOMS[r].crates || [];
+    for (let j = 0; j < old.length; j++) {
+      if (old[j].thick) throw new Error('no thick in old rooms');
+    }
+  }
+
+  const seedPick = makeState();
+  resetRoom(seedPick, 0, false);
+  if (seedPick.seed !== 0) throw new Error('seed starts 0');
+  seedPick.items.push({ kind: 'seed', x: seedPick.player.x, y: seedPick.player.y, r: 10, taken: false });
+  update(seedPick, 0.016);
+  if (seedPick.seed !== 1) throw new Error('pick 焰种');
+  if (seedPick.toast !== TOAST.seedGet) throw new Error('捡到焰种');
+  seedPick.watch = true;
+  resetRoom(seedPick, 0, false);
+  if (seedPick.seed !== 0) throw new Error('R clears seed');
+  if (!seedPick.watch) throw new Error('R keeps 观摩');
+
+  const thickNo = makeState();
+  resetRoom(thickNo, 0, false);
+  thickNo.seed = 0;
+  thickNo.crates.push({ x: 400, y: 200, w: CRATE, h: CRATE, open: false, loot: 'core', thick: true });
+  explode(thickNo, 424, 224, false);
+  if (thickNo.crates[thickNo.crates.length - 1].open) throw new Error('thick closed normal');
+  explode(thickNo, 424, 224, true);
+  if (thickNo.crates[thickNo.crates.length - 1].open) throw new Error('thick closed hot');
+
+  const thickYes = makeState();
+  resetRoom(thickYes, 0, false);
+  thickYes.player.x = 40;
+  thickYes.player.y = 40;
+  thickYes.seed = 1;
+  thickYes.crates.push({ x: 400, y: 200, w: CRATE, h: CRATE, open: false, loot: 'core', thick: true });
+  explode(thickYes, 424, 224, false);
+  if (!thickYes.crates[thickYes.crates.length - 1].open) throw new Error('seeded opens thick');
+  if (thickYes.seed !== 0) throw new Error('seed consumed');
+  if (thickYes.toast !== TOAST.seedBoom) throw new Error('焰种爆了');
+  if (!thickYes.embers.length || Math.abs(thickYes.embers[0].r - SEED_R) > 1e-9) {
+    throw new Error('SEED_R');
+  }
+
+  const seedWet = makeState();
+  resetRoom(seedWet, 0, false);
+  seedWet.seed = 1;
+  seedWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(seedWet, 120, 120, false);
+  for (let i = 0; i < 24; i++) update(seedWet, 0.1);
+  if (seedWet.stats.fizzles < 1) throw new Error('seed fizzle');
+  if (seedWet.stats.booms !== 0) throw new Error('fizzle no boom');
+  if (seedWet.seed !== 1) throw new Error('fizzle keeps seed');
+
+  const seedSeek = makeState();
+  resetRoom(seedSeek, 0, false);
+  setWatch(seedSeek, true);
+  seedSeek.crates.forEach(function (c) { c.open = true; });
+  seedSeek.items.push({ kind: 'seed', x: 400, y: 220, r: 10, taken: false });
+  const seedD0 = dist(seedSeek.player.x, seedSeek.player.y, 400, 220);
+  for (let i = 0; i < 30; i++) update(seedSeek, 0.05);
+  const seedD1 = dist(seedSeek.player.x, seedSeek.player.y, 400, 220);
+  if (seedSeek.seed !== 1 && !seedSeek.items[seedSeek.items.length - 1].taken && seedD1 >= seedD0 - 8) {
+    throw new Error('观摩 seek 焰种');
+  }
 
   const tideU = makeState();
   resetRoom(tideU, 0, false);
