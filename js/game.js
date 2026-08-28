@@ -7,6 +7,7 @@ const HOT_BLAST_R = 56;
 const CHAIN_T = 0.12;
 const COMBO_MIN = 3;
 const EMBER_T = 0.55;
+const SCORCH_T = 1.2;
 const VIEW_W = 960;
 const VIEW_H = 540;
 const PLAYER_R = 11;
@@ -45,6 +46,7 @@ const NAMES = {
   hound: '循辙',
   moth: '灯蛾',
   ash: '余烬',
+  scorch: '焦痕',
   hint: '跑过的路两秒后会爆',
 };
 
@@ -86,6 +88,7 @@ const COL = {
   core: '#ff5d8f',
   heart: '#ff5d8f',
   ash: '#6b5344',
+  scorch: '#2a1810',
 };
 
 let ROOMS = [];
@@ -241,6 +244,7 @@ function makeState() {
     parts: [],
     rings: [],
     embers: [],
+    scorches: [],
     input: { x: 0, y: 0, dash: false },
     cam: { x: 0, y: 0, punch: 0 },
     hitstop: 0,
@@ -297,6 +301,7 @@ function resetRoom(s, index, keepHearts) {
   s.parts.length = 0;
   s.rings.length = 0;
   s.embers.length = 0;
+  s.scorches.length = 0;
   s.won = false;
   s.dead = false;
   s.pendingNext = 0;
@@ -582,6 +587,23 @@ function spawnEmber(s, x, y, r, hot) {
   });
 }
 
+function spawnScorch(s, x, y, r, hot) {
+  if (reducedMotion()) return;
+  s.scorches.push({
+    x: x, y: y, r: r,
+    t: SCORCH_T,
+    life: SCORCH_T,
+    hot: !!hot,
+  });
+}
+
+function updateScorches(s, dt) {
+  for (let i = s.scorches.length - 1; i >= 0; i--) {
+    s.scorches[i].t -= dt;
+    if (s.scorches[i].t <= 0) s.scorches.splice(i, 1);
+  }
+}
+
 function hurtEnemyFromEmber(s, e, em) {
   if (e.hp <= 0) return;
   if (e.hitT > 0) return;
@@ -627,6 +649,7 @@ function explode(s, x, y, hot, fused) {
   s.lastBoomY = y;
   s.boomSeekT = MOTH_SEEK_T;
   spawnEmber(s, x, y, r, hot);
+  spawnScorch(s, x, y, r, hot);
   burst(s, x, y, hot ? 16 : 10, hot ? COL.gold : COL.ember, hot ? 220 : 170);
   addRing(s, x, y, r, hot);
   sfx('boom');
@@ -813,6 +836,7 @@ function update(s, dt) {
   }
 
   updateRings(s, dt);
+  updateScorches(s, dt);
 
   if (s.hitstop > 0) {
     s.hitstop -= dt;
@@ -1028,6 +1052,28 @@ function draw(s, ctx) {
     ctx.font = '13px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(NAMES.crate, c.x + c.w / 2, c.y + c.h / 2 + 4);
+  }
+
+  for (let i = 0; i < s.scorches.length; i++) {
+    const sc = s.scorches[i];
+    const k = clamp(sc.t / sc.life, 0, 1);
+    const rad = sc.r * (0.9 + 0.04 * k);
+    if (rad < 2) continue;
+    const stain = ctx.createRadialGradient(sc.x, sc.y, rad * 0.12, sc.x, sc.y, rad);
+    stain.addColorStop(0, 'rgba(18,8,6,' + (0.2 + 0.16 * k) + ')');
+    stain.addColorStop(0.62, 'rgba(42,20,12,' + (0.14 + 0.12 * k) + ')');
+    stain.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = stain;
+    ctx.beginPath();
+    ctx.arc(sc.x, sc.y, rad, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.18 + 0.28 * k;
+    ctx.strokeStyle = mixHex(COL.scorch, COL.ember, sc.hot ? 0.28 : 0.16);
+    ctx.lineWidth = (1.5 + 1.1 * k) / fit.scale;
+    ctx.beginPath();
+    ctx.arc(sc.x, sc.y, rad * 0.92, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   for (let i = 0; i < s.sparks.length; i++) {
@@ -1464,6 +1510,7 @@ function selfCheck() {
   ensureRooms();
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
+  if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
   if (!ROOMS || (ROOMS.length !== 11 && ROOMS.length !== 12)) throw new Error('need 11 or 12 rooms, got ' + (ROOMS ? ROOMS.length : 0));
   const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径'];
   for (let i = 0; i < 11; i++) {
@@ -1487,7 +1534,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾', '余烬'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾', '余烬', '焦痕'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -1506,6 +1553,7 @@ function selfCheck() {
   ];
   if (NAMES.hound !== '循辙') throw new Error('循辙 exists');
   if (NAMES.moth !== '灯蛾') throw new Error('灯蛾 name');
+  if (NAMES.scorch !== '焦痕') throw new Error('焦痕 exists');
   let houndN = 0;
   let mothN = 0;
   for (let r = 0; r < ROOMS.length; r++) {
@@ -1903,6 +1951,40 @@ function selfCheck() {
   const foeHp = foeEm.hp;
   update(emFoe, 0.016);
   if (foeEm.hp !== foeHp - 1) throw new Error('余烬 can hurt enemy');
+
+  const sc = makeState();
+  resetRoom(sc, 0, false);
+  sc.player.x = 80;
+  sc.player.y = 80;
+  explode(sc, 400, 220, false);
+  if (!sc.scorches.length) throw new Error('boom spawns 焦痕');
+  if (Math.abs(sc.scorches[0].r - BLAST_R) > 1e-9) throw new Error('焦痕 radius = blast');
+  if (Math.abs(sc.scorches[0].t - SCORCH_T) > 1e-9) throw new Error('焦痕 life 1.2');
+  for (let i = 0; i < 36; i++) update(sc, 0.02);
+  if (!sc.scorches.length) throw new Error('焦痕 still after 余烬');
+  if (sc.embers.length) throw new Error('余烬 gone before 焦痕');
+  sc.player.x = 400;
+  sc.player.y = 220;
+  sc.player.inv = 0;
+  sc.player.dashT = 0;
+  const scHp = sc.player.hearts;
+  update(sc, 0.016);
+  if (sc.player.hearts !== scHp) throw new Error('焦痕 does not deal HP');
+
+  const scHot = makeState();
+  resetRoom(scHot, 0, false);
+  scHot.player.x = 80;
+  scHot.player.y = 80;
+  explode(scHot, 400, 220, true);
+  if (Math.abs(scHot.scorches[0].r - HOT_BLAST_R) > 1e-9) throw new Error('hot 焦痕 radius');
+
+  const scFade = makeState();
+  resetRoom(scFade, 0, false);
+  scFade.player.x = 80;
+  scFade.player.y = 80;
+  explode(scFade, 400, 220, false);
+  for (let i = 0; i < 70; i++) update(scFade, 0.02);
+  if (scFade.scorches.length) throw new Error('焦痕 fades at 1.2s');
 
   const mothIdle = makeState();
   resetRoom(mothIdle, 9, false);
