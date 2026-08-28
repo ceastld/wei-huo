@@ -1,6 +1,8 @@
 'use strict';
 
 const TAIL_T = 2.0;
+const TIDE_LOW = 2.8;
+const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
 const BLAST_R = 36;
 const HOT_BLAST_R = 56;
@@ -45,6 +47,7 @@ const NAMES = {
   core: '心核',
   heal: '回星',
   water: '水洼',
+  tide: '潮涌',
   spark: '焰辙',
   hound: '循辙',
   moth: '灯蛾',
@@ -86,6 +89,9 @@ const TOAST = {
   wire: '密线一拉就炸',
   watch: '观摩中',
   watchOff: '手玩',
+  tideOn: '潮来了',
+  tideOff: '潮退了',
+  tide: '潮会熄辙',
 };
 
 const COL = {
@@ -170,12 +176,50 @@ function circleRect(cx, cy, cr, rx, ry, rw, rh) {
   return dist(cx, cy, nx, ny) <= cr;
 }
 
-function inWater(s, x, y) {
+function tideHigh(s) {
+  const t = (s && s.tideT) || 0;
+  return (t % (TIDE_LOW + TIDE_HIGH)) >= TIDE_LOW;
+}
+
+function hasTidePuddle(s) {
+  if (!s || !s.waters) return false;
   for (let i = 0; i < s.waters.length; i++) {
-    const w = s.waters[i];
-    if (x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h) return true;
+    if (s.waters[i].tide) return true;
   }
   return false;
+}
+
+function inWater(s, x, y) {
+  const high = tideHigh(s);
+  for (let i = 0; i < s.waters.length; i++) {
+    const w = s.waters[i];
+    if (x < w.x || x > w.x + w.w || y < w.y || y > w.y + w.h) continue;
+    if (w.tide && !high) continue;
+    return true;
+  }
+  return false;
+}
+
+function tickTide(s, dt) {
+  const was = !!s.tideHigh;
+  s.tideT = (s.tideT || 0) + dt;
+  const now = tideHigh(s);
+  s.tideHigh = now;
+  if (now === was || !hasTidePuddle(s)) return;
+  if (now) {
+    for (let i = 0; i < s.sparks.length; i++) {
+      const k = s.sparks[i];
+      if (k.dead || k.wet) continue;
+      if (!inWater(s, k.x, k.y)) continue;
+      k.wet = true;
+      k.t = Math.min(k.t, 0.08);
+    }
+    toast(s, TOAST.tideOn, 1.1, COL.water);
+    sfx('fizzle');
+    punch(s, 2);
+  } else {
+    toast(s, TOAST.tideOff, 1.1, COL.water);
+  }
 }
 
 function audioPack() {
@@ -278,6 +322,8 @@ function makeState() {
     watchStuckT: 0,
     watchLastX: 110,
     watchLastY: 310,
+    tideT: 0,
+    tideHigh: false,
   };
 }
 
@@ -336,8 +382,10 @@ function resetRoom(s, index, keepHearts) {
   s.boomSeekT = 0;
   s.burstN = 0;
   s.burstWait = 0;
+  s.tideT = 0;
+  s.tideHigh = false;
   s.waters = (room.puddles || []).map(function (p) {
-    return { x: p.x, y: p.y, w: p.w, h: p.h };
+    return { x: p.x, y: p.y, w: p.w, h: p.h, tide: !!p.tide };
   });
   s.crates = (room.crates || []).map(function (c) {
     return {
@@ -372,6 +420,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '灰径') toast(s, TOAST.ash, 1.4, COL.ember);
   else if (room.name === '环行') toast(s, TOAST.ring, 1.4, COL.gold);
   else if (room.name === '密线') toast(s, TOAST.wire, 1.4, COL.gold);
+  else if (room.name === '潮廊') toast(s, TOAST.tide, 1.4, COL.water);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1082,6 +1131,7 @@ function update(s, dt) {
     s.cam.y = 0;
   }
 
+  tickTide(s, dt);
   updateRings(s, dt);
   updateScorches(s, dt);
 
@@ -1272,17 +1322,38 @@ function draw(s, ctx) {
     ctx.stroke();
   }
 
+  const high = tideHigh(s);
   for (let i = 0; i < s.waters.length; i++) {
     const w = s.waters[i];
-    ctx.fillStyle = 'rgba(58,107,140,0.55)';
+    const tide = !!w.tide;
+    const wet = !tide || high;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    if (!wet) {
+      ctx.fillStyle = 'rgba(58,107,140,0.12)';
+      ctx.fillRect(w.x, w.y, w.w, w.h);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(180,220,240,0.26)';
+      ctx.lineWidth = 1.5 / fit.scale;
+      ctx.setLineDash([6 / fit.scale, 5 / fit.scale]);
+      ctx.strokeRect(w.x + 1, w.y + 1, w.w - 2, w.h - 2);
+      ctx.restore();
+      ctx.fillStyle = 'rgba(200,230,255,0.3)';
+      ctx.fillText(NAMES.tide, w.x + w.w * 0.5, w.y + w.h * 0.5 + 4);
+      continue;
+    }
+    let a = 0.55;
+    if (tide) {
+      const ph = (s.tideT % (TIDE_LOW + TIDE_HIGH)) - TIDE_LOW;
+      a = 0.48 + 0.12 * (0.5 + 0.5 * Math.sin((ph / TIDE_HIGH) * Math.PI * 2));
+    }
+    ctx.fillStyle = 'rgba(58,107,140,' + a + ')';
     ctx.fillRect(w.x, w.y, w.w, w.h);
     ctx.strokeStyle = 'rgba(180,220,240,0.35)';
     ctx.lineWidth = 1.5 / fit.scale;
     ctx.strokeRect(w.x + 1, w.y + 1, w.w - 2, w.h - 2);
     ctx.fillStyle = 'rgba(200,230,255,0.55)';
-    ctx.font = '12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(NAMES.water, w.x + w.w * 0.5, w.y + w.h * 0.5 + 4);
+    ctx.fillText(tide ? NAMES.tide : NAMES.water, w.x + w.w * 0.5, w.y + w.h * 0.5 + 4);
   }
 
   for (let i = 0; i < s.crates.length; i++) {
@@ -1775,8 +1846,8 @@ function selfCheck() {
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 13) throw new Error('need 13 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线'];
+  if (!ROOMS || ROOMS.length !== 14) throw new Error('need 14 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -1792,6 +1863,8 @@ function selfCheck() {
   if (ROOMS[11].name !== '环行') throw new Error('room 12 环行');
   if (ROOMS[12].id !== 'mixian') throw new Error('密线 id');
   if (ROOMS[12].name !== '密线') throw new Error('room 13 密线');
+  if (ROOMS[13].id !== 'chaolang') throw new Error('潮廊 id');
+  if (ROOMS[13].name !== '潮廊') throw new Error('room 14 潮廊');
 
   const fitJ = roomFit({ roomW: 960, roomH: 140 });
   if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
@@ -1801,7 +1874,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -1930,10 +2003,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/13') throw new Error('HUD 空场 1/13');
+  if (roomHudText(hud0) !== '空场 · 1/14') throw new Error('HUD 空场 1/14');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/13') throw new Error('HUD 3/13');
+  if (roomHudText(hud2) !== '水巷 · 3/14') throw new Error('HUD 3/14');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -2145,7 +2218,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/13') throw new Error('HUD 灰径 11/13');
+  if (roomHudText(hudAsh) !== '灰径 · 11/14') throw new Error('HUD 灰径 11/14');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -2172,7 +2245,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/13') throw new Error('HUD 环行 12/13');
+  if (roomHudText(hudRing) !== '环行 · 12/14') throw new Error('HUD 环行 12/14');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -2196,10 +2269,12 @@ function selfCheck() {
   }
   if (wireCore !== 1 || wireHeal < 1) throw new Error('密线 心核/回星');
   takeCore(wire, { x: 100, y: 100 });
-  if (!wire.won || wire.toast !== TOAST.all) throw new Error('密线 should 通关');
+  if (wire.won) throw new Error('密线 should not 通关');
+  for (let i = 0; i < 20; i++) update(wire, 0.1);
+  if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/13') throw new Error('HUD 密线 13/13');
+  if (roomHudText(hudWire) !== '密线 · 13/14') throw new Error('HUD 密线 13/14');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -2452,6 +2527,98 @@ function selfCheck() {
   if (!seek.won && !seek.items[0].taken && coreD1 >= coreD0 - 8) {
     throw new Error('观摩 seek 心核');
   }
+
+  if (TIDE_LOW !== 2.8) throw new Error('TIDE_LOW 2.8');
+  if (TIDE_HIGH !== 1.2) throw new Error('TIDE_HIGH 1.2');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (typeof tideHigh !== 'function') throw new Error('tideHigh');
+  if (TOAST.tideOn !== '潮来了') throw new Error('潮来了');
+  if (TOAST.tideOff !== '潮退了') throw new Error('潮退了');
+  if (TOAST.tide !== '潮会熄辙') throw new Error('潮会熄辙');
+  if (NAMES.tide !== '潮涌') throw new Error('潮涌');
+
+  const chao = makeState();
+  resetRoom(chao, 13, false);
+  if (chao.roomName !== '潮廊' || chao.roomId !== 'chaolang') throw new Error('chaolang load');
+  if (chao.toast !== TOAST.tide) throw new Error('潮廊 intro');
+  if (chao.roomW !== 960 || chao.roomH !== 400) throw new Error('潮廊 size');
+  if (chao.player.x !== 80 || chao.player.y !== 200) throw new Error('潮廊 spawn');
+  let tideN = 0;
+  let stillN = 0;
+  for (let i = 0; i < chao.waters.length; i++) {
+    if (chao.waters[i].tide) tideN += 1;
+    else stillN += 1;
+  }
+  if (tideN < 1) throw new Error('潮廊 needs tide puddle');
+  if (stillN < 1) throw new Error('潮廊 needs static 水洼');
+  let chaoCore = 0;
+  let chaoHeal = 0;
+  for (let i = 0; i < chao.crates.length; i++) {
+    if (chao.crates[i].loot === 'core') chaoCore += 1;
+    if (chao.crates[i].loot === 'heal') chaoHeal += 1;
+  }
+  if (chaoCore !== 1) throw new Error('潮廊 心核');
+  if (chaoHeal < 1) throw new Error('潮廊 回星');
+  let chaoHound = 0;
+  let chaoGuard = 0;
+  let chaoMoth = 0;
+  for (let i = 0; i < chao.enemies.length; i++) {
+    if (isHound(chao.enemies[i])) chaoHound += 1;
+    else if (isMoth(chao.enemies[i])) chaoMoth += 1;
+    else chaoGuard += 1;
+  }
+  if (chaoHound !== 1 || chaoGuard !== 1 || chaoMoth !== 1) throw new Error('潮廊 循辙/烬卫/灯蛾');
+  for (let i = 0; i < chao.crates.length; i++) {
+    const c = chao.crates[i];
+    if (circleRect(chao.player.x, chao.player.y, chao.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('潮廊 crate on spawn');
+    }
+  }
+  if (inWater(chao, 440, 28)) throw new Error('north ledge dry at low');
+  chao.tideT = TIDE_LOW + 0.01;
+  if (inWater(chao, 440, 28)) throw new Error('north ledge dry at high');
+  if (!inWater(chao, 440, 200)) throw new Error('tide gate wet at high');
+  if (inWater(chao, 880, 200)) throw new Error('east pocket dry at high');
+  chao.tideT = 0;
+  if (inWater(chao, 440, 200)) throw new Error('tide gate dry at low');
+  const chaoBox = chao.crates.find(function (c) { return c.loot === 'core'; });
+  explode(chao, chaoBox.x + chaoBox.w * 0.5, chaoBox.y - 20, false);
+  if (!chaoBox.open) throw new Error('潮廊 dry trail should open 心核');
+  takeCore(chao, { x: 100, y: 100 });
+  if (!chao.won || chao.toast !== TOAST.all) throw new Error('潮廊 should 通关');
+  const hudChao = makeState();
+  resetRoom(hudChao, 13, false);
+  if (roomHudText(hudChao) !== '潮廊 · 14/14') throw new Error('HUD 潮廊 14/14');
+
+  const tideU = makeState();
+  resetRoom(tideU, 0, false);
+  tideU.player.x = 40;
+  tideU.player.y = 40;
+  tideU.waters = [{ x: 200, y: 180, w: 80, h: 80, tide: true }];
+  tideU.tideT = 0;
+  tideU.tideHigh = false;
+  if (tideHigh(tideU)) throw new Error('tide starts low');
+  if (inWater(tideU, 240, 220) !== false) throw new Error('inWater false while low');
+  dropSpark(tideU, 240, 220, false);
+  if (tideU.sparks[0].wet) throw new Error('spark not wet while low');
+  const boomsTide = tideU.stats.booms;
+  const fizTide = tideU.stats.fizzles;
+  let guard = 0;
+  while (tideU.tideT < TIDE_LOW && guard < 200) {
+    if (tideU.sparks[0] && !tideU.sparks[0].dead) tideU.sparks[0].t = 0.5;
+    update(tideU, 0.05);
+    guard += 1;
+  }
+  if (!tideHigh(tideU)) throw new Error('tide should be high after 2.8s');
+  if (!inWater(tideU, 240, 220)) throw new Error('inWater true while high');
+  const soaked = tideU.sparks[0];
+  if (!soaked || (!soaked.dead && !soaked.wet)) throw new Error('rise soaks dry spark');
+  for (let i = 0; i < 8; i++) update(tideU, 0.05);
+  if (tideU.stats.fizzles <= fizTide) throw new Error('tide rise fizzle');
+  if (tideU.stats.booms !== boomsTide) throw new Error('tide fizzle no boom');
+  if (!inWater(tideU, 240, 220)) throw new Error('still high after fizzle');
+  for (let i = 0; i < 28; i++) update(tideU, 0.05);
+  if (inWater(tideU, 240, 220)) throw new Error('inWater false after fall');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
