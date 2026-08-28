@@ -4,6 +4,7 @@ const TAIL_T = 2.0;
 const SPARK_GAP = 18;
 const BLAST_R = 36;
 const HOT_BLAST_R = 56;
+const CHAIN_T = 0.12;
 const VIEW_W = 960;
 const VIEW_H = 540;
 const PLAYER_R = 11;
@@ -19,7 +20,7 @@ const HOUND_IDLE = 22;
 const HOUND_SEEK = 88;
 const HOUND_ROAD = 246;
 const HOUND_MOUNT = 70;
-const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八'];
+const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
 const HEART_MAX = 3;
 const HITSTOP = 0.08;
 const IFRAMES = 0.35;
@@ -60,6 +61,8 @@ const TOAST = {
   road: '循辙盯着你的路',
   cut: '水能切断公路',
   dashSafe: '冲能穿过焰辙',
+  chain: '连环了',
+  loop: '回廊转起来了',
 };
 
 const COL = {
@@ -233,6 +236,7 @@ function makeState() {
     stats: { booms: 0, fizzles: 0, drops: 0 },
     time: 0,
     taughtDash: false,
+    chainToastT: 0,
   };
 }
 
@@ -283,6 +287,7 @@ function resetRoom(s, index, keepHearts) {
   s.stats.booms = 0;
   s.stats.fizzles = 0;
   s.stats.drops = 0;
+  s.chainToastT = 0;
   s.waters = (room.puddles || []).map(function (p) {
     return { x: p.x, y: p.y, w: p.w, h: p.h };
   });
@@ -312,6 +317,7 @@ function resetRoom(s, index, keepHearts) {
   if (room.name === '夜市') toast(s, TOAST.night, 1.1, COL.gold);
   else if (room.name === '循径') toast(s, TOAST.road, 1.1, COL.gold);
   else if (room.name === '双刃') toast(s, TOAST.cut, 1.1, COL.water);
+  else if (room.name === '回廊') toast(s, TOAST.loop, 1.3, COL.gold);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -560,6 +566,22 @@ function explode(s, x, y, hot) {
     }
   }
 
+  let chained = 0;
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (k.dead || k.wet) continue;
+    if (k.x === x && k.y === y) continue;
+    if (dist(k.x, k.y, x, y) <= r) {
+      k.t = Math.min(k.t, CHAIN_T);
+      chained += 1;
+    }
+  }
+  if (chained > 0) {
+    punch(s, 2);
+    if (s.chainToastT <= 0) toast(s, TOAST.chain, 0.9, COL.gold);
+    s.chainToastT = 2.2;
+  }
+
   if (hit) punch(s, 6);
   else punch(s, 2);
 }
@@ -588,7 +610,7 @@ function goNext(s) {
     return;
   }
   resetRoom(s, s.roomIndex + 1, true);
-  toast(s, TOAST.clear, 1.1, COL.core);
+  if (!s.toast) toast(s, TOAST.clear, 1.1, COL.core);
 }
 
 function updateSparks(s, dt) {
@@ -622,6 +644,7 @@ function updateRings(s, dt) {
 function update(s, dt) {
   s.time += dt;
   if (s.toastT > 0) s.toastT -= dt;
+  if (s.chainToastT > 0) s.chainToastT -= dt;
   if (s.flash > 0) s.flash -= dt;
   if (s.cam.punch > 0) {
     s.cam.punch *= Math.pow(0.04, dt);
@@ -1232,9 +1255,9 @@ function boot() {
 function selfCheck() {
   ensureRooms();
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
-  if (!ROOMS || ROOMS.length !== 8) throw new Error('need 8 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃'];
-  for (let i = 0; i < 8; i++) {
+  if (!ROOMS || ROOMS.length !== 9) throw new Error('need 9 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊'];
+  for (let i = 0; i < 9; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
     }
@@ -1242,6 +1265,7 @@ function selfCheck() {
       throw new Error('room fields ' + ROOMS[i].name);
     }
   }
+  if (ROOMS[8].id !== 'huilang') throw new Error('回廊 id');
 
   const fitJ = roomFit({ roomW: 960, roomH: 140 });
   if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
@@ -1367,10 +1391,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/8') throw new Error('HUD 空场 1/8');
+  if (roomHudText(hud0) !== '空场 · 1/9') throw new Error('HUD 空场 1/9');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/8') throw new Error('HUD 3/8');
+  if (roomHudText(hud2) !== '水巷 · 3/9') throw new Error('HUD 3/9');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -1413,12 +1437,39 @@ function selfCheck() {
   explode(twoHit, hk.x, hk.y, false);
   if (hk.hp > 0) throw new Error('循辙 dies in 2 blasts');
 
+  const shuang = makeState();
+  resetRoom(shuang, 7, false);
+  if (shuang.roomName !== '双刃') throw new Error('shuangren load');
+  takeCore(shuang, { x: 100, y: 100 });
+  if (shuang.won) throw new Error('双刃 should not 通关');
+  for (let i = 0; i < 20; i++) update(shuang, 0.1);
+  if (shuang.roomName !== '回廊') throw new Error('core advances to 回廊');
+
   const last = makeState();
-  resetRoom(last, 7, false);
-  if (last.roomName !== '双刃') throw new Error('shuangren load');
-  last.roomIndex = 7;
+  resetRoom(last, 8, false);
+  if (last.roomName !== '回廊' || last.roomId !== 'huilang') throw new Error('huilang load');
+  if (last.toast !== TOAST.loop) throw new Error('回廊 intro');
+  let loopHound = 0;
+  let loopGuard = 0;
+  for (let i = 0; i < last.enemies.length; i++) {
+    if (isHound(last.enemies[i])) loopHound += 1;
+    else loopGuard += 1;
+  }
+  if (loopGuard !== 2 || loopHound !== 1) throw new Error('回廊 2 烬卫 + 1 循辙');
+  if (!last.waters.length) throw new Error('回廊 needs 水洼');
+  let loopCore = 0;
+  let loopHeal = 0;
+  for (let i = 0; i < last.crates.length; i++) {
+    if (last.crates[i].loot === 'core') loopCore += 1;
+    if (last.crates[i].loot === 'heal') loopHeal += 1;
+  }
+  if (loopCore !== 1 || loopHeal < 1) throw new Error('回廊 心核/回星');
+  const coreBox = last.crates.find(function (c) { return c.loot === 'core'; });
+  explode(last, 858, 416, false);
+  if (!coreBox.open) throw new Error('回廊 dry trail should open 心核');
+  last.roomIndex = 8;
   takeCore(last, { x: 100, y: 100 });
-  if (!last.won || last.toast !== TOAST.all) throw new Error('双刃 should 通关');
+  if (!last.won || last.toast !== TOAST.all) throw new Error('回廊 should 通关');
 
   const mid = makeState();
   resetRoom(mid, 0, false);
@@ -1428,6 +1479,74 @@ function selfCheck() {
   if (mid.roomName !== '追者') throw new Error('core advances to 追者');
 
   if (HITSTOP !== 0.08) throw new Error('hitstop 80ms');
+  if (CHAIN_T !== 0.12) throw new Error('CHAIN_T 0.12');
+  if (TOAST.chain !== '连环了') throw new Error('连环了');
+
+  const ch = makeState();
+  resetRoom(ch, 0, false);
+  ch.player.x = 40;
+  ch.player.y = 40;
+  for (let i = 0; i < 5; i++) dropSpark(ch, 200 + i * SPARK_GAP, 200, false);
+  ch.sparks[0].t = 0;
+  update(ch, 0.016);
+  if (ch.stats.booms !== 1) throw new Error('chain must not sync recurse');
+  if (ch.sparks[1].dead) throw new Error('chain delays neighbor');
+  if (ch.sparks[1].t > CHAIN_T + 1e-9) throw new Error('chain cuts timer');
+  if (ch.sparks[3].t <= CHAIN_T) throw new Error('outside blast no chain');
+  if (ch.toast !== TOAST.chain) throw new Error('连环了 toast');
+  update(ch, 0);
+  if (ch.stats.booms !== 1) throw new Error('same explode no re-trigger');
+  for (let i = 0; i < 10; i++) update(ch, 0.016);
+  if (ch.stats.booms < 3) throw new Error('cascade via timers');
+
+  const hotCh = makeState();
+  resetRoom(hotCh, 0, false);
+  hotCh.player.x = 40;
+  hotCh.player.y = 40;
+  dropSpark(hotCh, 200, 200, true);
+  dropSpark(hotCh, 200 + 50, 200, false);
+  hotCh.sparks[0].t = 0;
+  update(hotCh, 0.016);
+  if (hotCh.sparks[1].t > CHAIN_T + 1e-9) throw new Error('hot blast chains at HOT_BLAST_R');
+
+  const coldCh = makeState();
+  resetRoom(coldCh, 0, false);
+  coldCh.player.x = 40;
+  coldCh.player.y = 40;
+  dropSpark(coldCh, 200, 200, false);
+  dropSpark(coldCh, 200 + 50, 200, false);
+  coldCh.sparks[0].t = 0;
+  update(coldCh, 0.016);
+  if (coldCh.sparks[1].t <= CHAIN_T) throw new Error('normal blast uses BLAST_R');
+
+  const wetCh = makeState();
+  resetRoom(wetCh, 0, false);
+  wetCh.player.x = 40;
+  wetCh.player.y = 40;
+  wetCh.waters = [{ x: 90, y: 80, w: 50, h: 50 }];
+  dropSpark(wetCh, 120, 100, false);
+  dropSpark(wetCh, 150, 100, false);
+  if (!wetCh.sparks[0].wet || wetCh.sparks[1].wet) throw new Error('wet/dry pair');
+  wetCh.sparks[0].t = 0;
+  update(wetCh, 0.016);
+  if (wetCh.stats.booms !== 0) throw new Error('fizzle must not boom');
+  if (wetCh.sparks[1].t <= CHAIN_T) throw new Error('fizzle must not chain');
+  wetCh.sparks[1].t = 0;
+  update(wetCh, 0.016);
+  if (wetCh.stats.booms !== 1) throw new Error('dry neighbor still booms later');
+
+  const wetHit = makeState();
+  resetRoom(wetHit, 0, false);
+  wetHit.player.x = 40;
+  wetHit.player.y = 40;
+  wetHit.waters = [{ x: 210, y: 180, w: 40, h: 40 }];
+  dropSpark(wetHit, 200, 200, false);
+  dropSpark(wetHit, 218, 200, false);
+  if (wetHit.sparks[0].wet || !wetHit.sparks[1].wet) throw new Error('dry hits wet');
+  wetHit.sparks[0].t = 0;
+  update(wetHit, 0.016);
+  if (wetHit.sparks[1].dead) throw new Error('wet spark stays live');
+  if (wetHit.sparks[1].t <= CHAIN_T) throw new Error('wet spark not chained');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
