@@ -44,6 +44,10 @@ const DRUM_DMG = 2;
 const DRUM_KB = 220;
 const PULSE_N = 2;
 const PULSE_DT = 0.36;
+const RAIN_N = 3;
+const RAIN_H = 180;
+const RAIN_GAP = 30;
+const RAIN_DT = 0.14;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -134,6 +138,7 @@ const NAMES = {
   fan: '扇爆',
   drum: '鼓爆',
   pulse: '脉爆',
+  rain: '雨爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -250,6 +255,9 @@ const TOAST = {
   pulseGet: '捡到脉爆',
   pulseUse: '脉来了',
   pulseRoom: '脉过去清场',
+  rainGet: '捡到雨爆',
+  rainUse: '雨下来了',
+  rainRoom: '雨过去清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -287,6 +295,7 @@ const COL = {
   fan: '#ff7a54',
   drum: '#ffd24a',
   pulse: '#c08cff',
+  rain: '#5ee0ff',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -542,6 +551,7 @@ function lootKind(drop) {
   if (drop === '扇爆' || drop === 'fan') return 'fan';
   if (drop === '鼓爆' || drop === 'drum') return 'drum';
   if (drop === '脉爆' || drop === 'pulse') return 'pulse';
+  if (drop === '雨爆' || drop === 'rain') return 'rain';
   return null;
 }
 
@@ -614,6 +624,7 @@ function makeState() {
     fanReady: false,
     drumReady: false,
     pulseReady: false,
+    rainReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -625,6 +636,7 @@ function makeState() {
     fans: [],
     drums: [],
     pulses: [],
+    rains: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -747,6 +759,7 @@ function resetRoom(s, index, keepHearts) {
   s.fanReady = false;
   s.drumReady = false;
   s.pulseReady = false;
+  s.rainReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -779,6 +792,8 @@ function resetRoom(s, index, keepHearts) {
   s.drums.length = 0;
   if (!s.pulses) s.pulses = [];
   s.pulses.length = 0;
+  if (!s.rains) s.rains = [];
+  s.rains.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -898,6 +913,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '扇廊') toast(s, TOAST.fanRoom, 1.4, COL.fan);
   else if (room.name === '鼓廊') toast(s, TOAST.drumRoom, 1.4, COL.drum);
   else if (room.name === '脉廊') toast(s, TOAST.pulseRoom, 1.4, COL.pulse);
+  else if (room.name === '雨廊') toast(s, TOAST.rainRoom, 1.4, COL.rain);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1550,6 +1566,32 @@ function updatePulses(s, dt) {
   }
 }
 
+function updateRains(s, dt) {
+  if (!s.rains || !s.rains.length) return;
+  const fires = [];
+  for (let i = s.rains.length - 1; i >= 0; i--) {
+    const p = s.rains[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.rains.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 6, p.y - 12 - Math.random() * 18, 1, COL.rain, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.rain, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -1727,6 +1769,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.pulseReady) {
     s.pulseReady = false;
     pulsing = true;
+  }
+  let raining = false;
+  if (!forked && s.rainReady) {
+    s.rainReady = false;
+    raining = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2262,6 +2309,19 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 160);
     }
   }
+  if (raining) {
+    if (!s.rains) s.rains = [];
+    for (let k = 0; k < RAIN_N; k++) {
+      s.rains.push({ x: x, y: y - RAIN_H + RAIN_GAP * k, t: RAIN_DT * (k + 1) });
+    }
+    toast(s, TOAST.rainUse, 1.1, COL.rain);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.rain, 170);
+      burst(s, x, y, 4, COL.gold, 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2534,6 +2594,7 @@ function watchSteer(s, dt) {
   let fanIt = null;
   let drumIt = null;
   let pulseIt = null;
+  let rainIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2560,8 +2621,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'fan') fanIt = it;
     if (it.kind === 'drum') drumIt = it;
     if (it.kind === 'pulse') pulseIt = it;
+    if (it.kind === 'rain') rainIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt);
 
   let guard = null;
   let gd = 1e9;
@@ -2687,6 +2749,10 @@ function watchSteer(s, dt) {
   } else if (!s.pulseReady && pulseIt) {
     tx = pulseIt.x - p.x;
     ty = pulseIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.rainReady && rainIt) {
+    tx = rainIt.x - p.x;
+    ty = rainIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -2867,6 +2933,7 @@ function update(s, dt) {
     updateFans(s, dt);
     updateDrums(s, dt);
     updatePulses(s, dt);
+    updateRains(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -2888,6 +2955,7 @@ function update(s, dt) {
     updateFans(s, dt);
     updateDrums(s, dt);
     updatePulses(s, dt);
+    updateRains(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3001,6 +3069,7 @@ function update(s, dt) {
   updateFans(s, dt);
   updateDrums(s, dt);
   updatePulses(s, dt);
+  updateRains(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3194,6 +3263,13 @@ function update(s, dt) {
       toast(s, TOAST.pulseGet, 1.1, COL.pulse);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.pulse, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'rain') {
+      s.rainReady = true;
+      toast(s, TOAST.rainGet, 1.1, COL.rain);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.rain, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -3876,6 +3952,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.pulse, it.x, it.y - 16);
+    } else if (it.kind === 'rain') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.rain, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.rain;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.rain;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.rain, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -4280,6 +4371,38 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('脉', p.x, p.y - 12);
+    }
+  }
+
+  if (s.rains && s.rains.length) {
+    for (let i = 0; i < s.rains.length; i++) {
+      const p = s.rains[i];
+      const maxT = RAIN_DT * RAIN_N;
+      const u = Math.max(0, p.t) / maxT;
+      const y0 = p.y - 36;
+      if (!reducedMotion()) glow(ctx, p.x, (y0 + p.y) * 0.5, 18, COL.rain, 0.28);
+      ctx.strokeStyle = COL.rain;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      if (reducedMotion()) {
+        ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.moveTo(p.x, y0);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        ctx.fillStyle = COL.rain;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.rain;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('雨', p.x, p.y - 12);
     }
   }
 
@@ -5037,6 +5160,27 @@ function draw(s, ctx) {
     ctx.arc(qx, qy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.rainReady) {
+    let rx;
+    let ry;
+    if (reducedMotion()) {
+      rx = p.x - 14;
+      ry = p.y - 4;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9;
+      rx = p.x + Math.cos(a) * 16;
+      ry = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, rx, ry, 8, COL.rain, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.rain;
+    ctx.arc(rx, ry, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(rx, ry, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -5395,6 +5539,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (poolEl && s.pulseReady && !s.poolReady) {
     poolEl.textContent = NAMES.pulse;
   }
+  const rainEl = (typeof document !== 'undefined') ? document.getElementById('rain') : null;
+  if (rainEl) {
+    rainEl.textContent = s.rainReady ? NAMES.rain : '';
+  } else if (pulseEl && s.rainReady && !s.pulseReady) {
+    pulseEl.textContent = NAMES.rain;
+  } else if (drumEl && s.rainReady && !s.drumReady) {
+    drumEl.textContent = NAMES.rain;
+  } else if (fanEl && s.rainReady && !s.fanReady) {
+    fanEl.textContent = NAMES.rain;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -5521,10 +5675,14 @@ function selfCheck() {
   if (DRUM_KB !== 220) throw new Error('DRUM_KB 220');
   if (PULSE_N !== 2) throw new Error('PULSE_N 2');
   if (PULSE_DT !== 0.36) throw new Error('PULSE_DT 0.36');
+  if (RAIN_N !== 3) throw new Error('RAIN_N 3');
+  if (RAIN_H !== 180) throw new Error('RAIN_H 180');
+  if (RAIN_GAP !== 30) throw new Error('RAIN_GAP 30');
+  if (RAIN_DT !== 0.14) throw new Error('RAIN_DT 0.14');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 40) throw new Error('need 40 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊'];
+  if (!ROOMS || ROOMS.length !== 41) throw new Error('need 41 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -5594,6 +5752,8 @@ function selfCheck() {
   if (ROOMS[38].name !== '鼓廊') throw new Error('room 39 鼓廊');
   if (ROOMS[39].id !== 'mailang') throw new Error('脉廊 id');
   if (ROOMS[39].name !== '脉廊') throw new Error('room 40 脉廊');
+  if (ROOMS[40].id !== 'yulang') throw new Error('雨廊 id');
+  if (ROOMS[40].name !== '雨廊') throw new Error('room 41 雨廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -5619,6 +5779,9 @@ function selfCheck() {
   if (NAMES.pulse !== '脉爆') throw new Error('NAMES.pulse');
   if (COL.pulse !== '#c08cff') throw new Error('COL.pulse');
   if (lootKind('脉爆') !== 'pulse' || lootKind('pulse') !== 'pulse') throw new Error('lootKind 脉爆');
+  if (NAMES.rain !== '雨爆') throw new Error('NAMES.rain');
+  if (COL.rain !== '#5ee0ff') throw new Error('COL.rain');
+  if (lootKind('雨爆') !== 'rain' || lootKind('rain') !== 'rain') throw new Error('lootKind 雨爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -7172,6 +7335,8 @@ function selfCheck() {
   if (lootKind('洼爆') !== 'pool' || lootKind('pool') !== 'pool') throw new Error('lootKind 洼爆');
   if (lootKind('扇爆') !== 'fan' || lootKind('fan') !== 'fan') throw new Error('lootKind 扇爆');
   if (lootKind('鼓爆') !== 'drum' || lootKind('drum') !== 'drum') throw new Error('lootKind 鼓爆');
+  if (lootKind('脉爆') !== 'pulse' || lootKind('pulse') !== 'pulse') throw new Error('lootKind 脉爆');
+  if (lootKind('雨爆') !== 'rain' || lootKind('rain') !== 'rain') throw new Error('lootKind 雨爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -12618,6 +12783,7 @@ function selfCheck() {
   bothP.fanReady = true;
   bothP.drumReady = true;
   bothP.pulseReady = true;
+  bothP.rainReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -12625,9 +12791,11 @@ function selfCheck() {
   if (bothP.fanReady) throw new Error('same boom spends 扇爆');
   if (bothP.drumReady) throw new Error('same boom spends 鼓爆');
   if (bothP.pulseReady) throw new Error('same boom spends 脉爆');
+  if (bothP.rainReady) throw new Error('same boom spends 雨爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
+  if (!bothP.rains || bothP.rains.length !== RAIN_N) throw new Error('same boom rains');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -12698,7 +12866,10 @@ function selfCheck() {
   explode(mai, maiBox.x + maiBox.w * 0.5, maiBox.y - 20, false);
   if (!maiBox.open) throw new Error('脉廊 dry trail should open 心核');
   takeCore(mai, { x: 100, y: 100 });
-  if (!mai.won || mai.toast !== TOAST.all) throw new Error('脉廊 should 通关');
+  if (mai.won) throw new Error('脉廊 should not 通关');
+  if (mai.toast !== TOAST.core) throw new Error('脉廊 过关');
+  for (let i = 0; i < 20; i++) update(mai, 0.1);
+  if (mai.roomName !== '雨廊') throw new Error('core advances to 雨廊');
   const hudMai = makeState();
   resetRoom(hudMai, 39, false);
   if (roomHudText(hudMai).indexOf('脉廊 · 40/') !== 0) throw new Error('HUD 脉廊 40/n');
@@ -12711,6 +12882,266 @@ function selfCheck() {
   if (TOAST.pulseGet !== '捡到脉爆') throw new Error('捡到脉爆');
   if (TOAST.pulseUse !== '脉来了') throw new Error('脉来了 toast');
   if (TOAST.pulseRoom !== '脉过去清场') throw new Error('脉过去清场');
+
+  const yu = makeState();
+  resetRoom(yu, 40, false);
+  if (yu.roomName !== '雨廊' || yu.roomId !== 'yulang') throw new Error('yulang load');
+  if (yu.toast !== TOAST.rainRoom) throw new Error('雨廊 intro');
+  if (yu.roomW !== 960 || yu.roomH !== 400) throw new Error('雨廊 size');
+  if (yu.player.x !== 80 || yu.player.y !== 280) throw new Error('雨廊 spawn');
+  if (yu.rainReady) throw new Error('雨廊 rain starts false');
+  if (!yu.rains || yu.rains.length) throw new Error('雨廊 rains start empty');
+  let yuStill = 0;
+  let yuTide = 0;
+  for (let i = 0; i < yu.waters.length; i++) {
+    if (yu.waters[i].tide) yuTide += 1;
+    else yuStill += 1;
+  }
+  if (yuStill < 1) throw new Error('雨廊 needs static 水洼');
+  if (yuTide) throw new Error('雨廊 no tide');
+  let yuCore = 0;
+  let yuHeal = 0;
+  let yuThick = 0;
+  let yuRainItem = 0;
+  let yuPulseItem = 0;
+  let yuDrumItem = 0;
+  let yuFanItem = 0;
+  for (let i = 0; i < yu.crates.length; i++) {
+    if (yu.crates[i].loot === 'core') yuCore += 1;
+    if (yu.crates[i].loot === 'heal') yuHeal += 1;
+    if (yu.crates[i].thick) yuThick += 1;
+  }
+  for (let i = 0; i < yu.items.length; i++) {
+    if (yu.items[i].kind === 'rain') yuRainItem += 1;
+    if (yu.items[i].kind === 'pulse') yuPulseItem += 1;
+    if (yu.items[i].kind === 'drum') yuDrumItem += 1;
+    if (yu.items[i].kind === 'fan') yuFanItem += 1;
+  }
+  if (yuRainItem < 1) throw new Error('雨廊 needs 雨爆');
+  if (yuPulseItem || yuDrumItem || yuFanItem) throw new Error('雨廊 no extra pickup');
+  if (yuCore !== 1) throw new Error('雨廊 心核');
+  if (yuHeal < 1) throw new Error('雨廊 回星');
+  const yuBox = yu.crates.find(function (c) { return c.loot === 'core'; });
+  if (!yuBox || yuBox.thick) throw new Error('雨廊 心核 crate is not thick');
+  if (yuThick) throw new Error('雨廊 no thick crate');
+  let yuHound = 0;
+  let yuGuard = 0;
+  let yuMoth = 0;
+  let yuEater = 0;
+  let yuShell = 0;
+  let yuBoomer = 0;
+  for (let i = 0; i < yu.enemies.length; i++) {
+    if (isHound(yu.enemies[i])) yuHound += 1;
+    else if (isMoth(yu.enemies[i])) yuMoth += 1;
+    else if (isEater(yu.enemies[i])) yuEater += 1;
+    else if (isShell(yu.enemies[i])) yuShell += 1;
+    else if (isBoomer(yu.enemies[i])) yuBoomer += 1;
+    else yuGuard += 1;
+  }
+  if (yuGuard !== 3 || yuHound !== 0 || yuMoth !== 0 || yuEater !== 0 || yuShell !== 0 || yuBoomer !== 0) {
+    throw new Error('雨廊 烬卫 only');
+  }
+  if (inWater(yu, 80, 280) || inOil(yu, 80, 280)) throw new Error('雨廊 spawn dry');
+  if (inWater(yu, 240, 280) || inOil(yu, 240, 280)) throw new Error('雨廊 雨爆 dry');
+  if (inWater(yu, 400, 280) || inOil(yu, 400, 280)) throw new Error('雨廊 plant dry');
+  if (inOil(yu, 860, 268) || inWater(yu, 860, 268)) throw new Error('雨廊 core dry');
+  if (inWater(yu, 400, 100) || inOil(yu, 400, 100)) throw new Error('雨廊 烬卫 dry sky');
+  if (inWater(yu, 400, 130) || inOil(yu, 400, 130)) throw new Error('雨廊 烬卫 dry mid');
+  if (inWater(yu, 400, 160) || inOil(yu, 400, 160)) throw new Error('雨廊 烬卫 dry low');
+  if (!inWater(yu, 750, 365)) throw new Error('雨廊 wet bag');
+  if (inWater(yu, 400, 50)) throw new Error('雨廊 north shelf wet');
+  for (let i = 0; i < yu.crates.length; i++) {
+    const c = yu.crates[i];
+    if (circleRect(yu.player.x, yu.player.y, yu.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('雨廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 450; x += 10) {
+    for (let i = 0; i < yu.crates.length; i++) {
+      const c = yu.crates[i];
+      if (circleRect(x, 280, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('雨廊 crate on dry walk');
+      }
+    }
+  }
+  const yuSky = yu.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 100) < 1; });
+  const yuMid = yu.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 130) < 1; });
+  const yuLow = yu.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 160) < 1; });
+  if (!yuSky || !yuMid || !yuLow) throw new Error('雨廊 three 烬卫 seats');
+  const yuSeats = [yuSky, yuMid, yuLow];
+  for (let i = 0; i < yuSeats.length; i++) {
+    const e = yuSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 280);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('雨廊 primary misses 烬卫');
+  }
+  for (let i = 0; i < yuSeats.length; i++) {
+    for (let k = 0; k < RAIN_N; k++) {
+      const dropY = 280 - RAIN_H + RAIN_GAP * k;
+      if (dist(yuSeats[i].x, yuSeats[i].y, 400, dropY) > HOT_BLAST_R + (yuSeats[i].r || ENEMY_R)) {
+        throw new Error('雨廊 hot rain reaches 烬卫');
+      }
+    }
+  }
+  const yuCoreCx = yuBox.x + yuBox.w * 0.5;
+  const yuCoreCy = yuBox.y + yuBox.h * 0.5;
+  if (!(dist(yuCoreCx, yuCoreCy, 400, 280) > HOT_BLAST_R)) throw new Error('雨廊 core outside plant blast');
+  yu.player.x = 80;
+  yu.player.y = 80;
+  yu.player.hearts = 3;
+  yu.player.inv = 2;
+  yu.hitstop = 0;
+  yu.embers.length = 0;
+  const yuGround = yu.items.find(function (it) { return it.kind === 'rain' && !it.taken; });
+  if (!yuGround) throw new Error('雨廊 ground 雨爆 present');
+  yu.player.x = yuGround.x;
+  yu.player.y = 280;
+  update(yu, 0.016);
+  if (yu.rainReady !== true) throw new Error('pick rain → rainReady');
+  if (yu.toast !== TOAST.rainGet) throw new Error('捡到雨爆 room');
+  yu.player.x = 80;
+  yu.player.y = 80;
+  yu.player.inv = 2;
+  yu.hitstop = 0;
+  yu.embers.length = 0;
+  const yuHpSky = yuSky.hp;
+  const yuHpMid = yuMid.hp;
+  const yuHpLow = yuLow.hp;
+  explode(yu, 400, 280, false);
+  if (yu.rainReady) throw new Error('雨廊 rain spends');
+  if (yu.toast !== TOAST.rainUse) throw new Error('雨下来了 room');
+  if (!yu.rains || yu.rains.length !== RAIN_N) throw new Error('雨廊 rains queued');
+  if (Math.abs(yu.rains[0].x - 400) > 1e-6 || Math.abs(yu.rains[0].y - 100) > 1e-6) throw new Error('雨廊 drop sky');
+  if (Math.abs(yu.rains[1].x - 400) > 1e-6 || Math.abs(yu.rains[1].y - 130) > 1e-6) throw new Error('雨廊 drop mid');
+  if (Math.abs(yu.rains[2].x - 400) > 1e-6 || Math.abs(yu.rains[2].y - 160) > 1e-6) throw new Error('雨廊 drop low');
+  if (Math.abs(yu.rains[0].t - RAIN_DT) > 1e-6) throw new Error('雨廊 dt 1');
+  if (Math.abs(yu.rains[1].t - RAIN_DT * 2) > 1e-6) throw new Error('雨廊 dt 2');
+  if (Math.abs(yu.rains[2].t - RAIN_DT * 3) > 1e-6) throw new Error('雨廊 dt 3');
+  if (yuSky.hp !== yuHpSky || yuMid.hp !== yuHpMid || yuLow.hp !== yuHpLow) throw new Error('雨廊 primary misses');
+  yu.hitstop = 0;
+  updateRains(yu, RAIN_DT + 0.01);
+  if (yu.rains.length !== 2) throw new Error('雨廊 first drop');
+  if (!(yuSky.hp === yuHpSky - 2 || yuSky.hp <= 0)) throw new Error('雨廊 rain dmg sky');
+  if (!(yuMid.hp === yuHpMid - 2 || yuMid.hp <= 0)) throw new Error('雨廊 rain dmg mid');
+  if (!(yuLow.hp === yuHpLow - 2 || yuLow.hp <= 0)) throw new Error('雨廊 rain dmg low');
+  yuSky.x = 400;
+  yuSky.y = 100;
+  yuMid.x = 400;
+  yuMid.y = 130;
+  yuLow.x = 400;
+  yuLow.y = 160;
+  yu.hitstop = 0;
+  updateRains(yu, RAIN_DT + 0.01);
+  if (yu.rains.length !== 1) throw new Error('雨廊 second drop');
+  yuSky.x = 400;
+  yuSky.y = 100;
+  yuMid.x = 400;
+  yuMid.y = 130;
+  yuLow.x = 400;
+  yuLow.y = 160;
+  yu.hitstop = 0;
+  updateRains(yu, RAIN_DT + 0.01);
+  if (yu.rains.length !== 0) throw new Error('雨廊 rains finish');
+  if (yuSky.hp > 0 || yuMid.hp > 0 || yuLow.hp > 0) throw new Error('雨廊 three rains kill');
+  yu.rainReady = true;
+  dropSpark(yu, 300, 80, false);
+  if (yu.rainReady !== true) throw new Error('dropSpark keeps 雨爆');
+  yu.input.dash = true;
+  yu.player.dashT = 0;
+  yu.player.dashCd = 0;
+  yu.hitstop = 0;
+  update(yu, 0.016);
+  if (yu.rainReady !== true) throw new Error('dash does not consume 雨爆');
+  const rainSelf = makeState();
+  resetRoom(rainSelf, 0, false);
+  rainSelf.rainReady = true;
+  rainSelf.player.x = 400;
+  rainSelf.player.y = 100;
+  rainSelf.player.inv = 0;
+  rainSelf.player.hearts = 3;
+  explode(rainSelf, 400, 280, false);
+  if (rainSelf.player.hearts !== 3) throw new Error('primary dry misses player for rain');
+  rainSelf.hitstop = 0;
+  updateRains(rainSelf, RAIN_DT + 0.01);
+  if (rainSelf.player.hearts !== 2) throw new Error('own rain hurts player');
+  rainSelf.player.hearts = 3;
+  rainSelf.player.inv = 0;
+  rainSelf.player.dashT = DASH_TIME;
+  rainSelf.rains = [{ x: 400, y: 100, t: 0 }];
+  rainSelf.hitstop = 0;
+  updateRains(rainSelf, 0.02);
+  if (rainSelf.player.hearts !== 3) throw new Error('dash i-frames skip rain');
+  yu.rainReady = true;
+  yu.sparks.length = 0;
+  if (yu.rains) yu.rains.length = 0;
+  yu.player.x = 80;
+  yu.player.y = 80;
+  yu.player.dashT = 0;
+  yu.player.dashCd = 0;
+  yu.player.vx = 0;
+  yu.player.vy = 0;
+  yu.player.inv = 2;
+  yu.input.x = 0;
+  yu.input.y = 0;
+  yu.input.dash = false;
+  yu.hitstop = 0;
+  yu.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(yu, 120, 120, false);
+  if (!yu.sparks[yu.sparks.length - 1].wet) throw new Error('雨廊 wet spark');
+  const yuBooms = yu.stats.booms;
+  for (let i = 0; i < 24; i++) update(yu, 0.1);
+  if (yu.rainReady !== true) throw new Error('雨廊 wet fizzle does not consume');
+  if (yu.stats.booms !== yuBooms) throw new Error('雨廊 wet no extra boom');
+  yu.waters = [];
+  explode(yu, 200, 200, false, false, false, { fork: true });
+  if (yu.rainReady !== true) throw new Error('雨廊 fork does not consume');
+  yu.echoReady = true;
+  explode(yu, 200, 200, false);
+  yu.rainReady = true;
+  for (let i = 0; i < 12; i++) update(yu, 0.05);
+  if (yu.rainReady !== true) throw new Error('雨廊 echo does not consume');
+  yu.fanReady = true;
+  explode(yu, 200, 200, false);
+  yu.rainReady = true;
+  yu.hitstop = 0;
+  updateFans(yu, FAN_DT * FAN_N + 0.05);
+  if (yu.rainReady !== true) throw new Error('雨廊 fan-fork does not consume');
+  yu.drumReady = true;
+  explode(yu, 200, 200, false);
+  yu.rainReady = true;
+  yu.hitstop = 0;
+  updateDrums(yu, 0.55);
+  if (yu.rainReady !== true) throw new Error('雨廊 drum-wave does not consume');
+  yu.pulseReady = true;
+  explode(yu, 200, 200, false);
+  yu.rainReady = true;
+  yu.hitstop = 0;
+  updatePulses(yu, PULSE_DT * PULSE_N + 0.05);
+  if (yu.rainReady !== true) throw new Error('雨廊 pulse-aftershock does not consume');
+  yu.spinReady = true;
+  explode(yu, 200, 200, false);
+  yu.rainReady = true;
+  yu.hitstop = 0;
+  updateSpins(yu, SPIN_DT * SPIN_N + 0.05);
+  if (yu.rainReady !== true) throw new Error('雨廊 spin-orbit does not consume');
+  yu.waters = [];
+  explode(yu, yuBox.x + yuBox.w * 0.5, yuBox.y - 20, false);
+  if (!yuBox.open) throw new Error('雨廊 dry trail should open 心核');
+  takeCore(yu, { x: 100, y: 100 });
+  if (!yu.won || yu.toast !== TOAST.all) throw new Error('雨廊 should 通关');
+  const hudYu = makeState();
+  resetRoom(hudYu, 40, false);
+  if (roomHudText(hudYu).indexOf('雨廊 · 41/') !== 0) throw new Error('HUD 雨廊 41/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (RAIN_N !== 3) throw new Error('RAIN_N 3');
+  if (RAIN_H !== 180) throw new Error('RAIN_H 180');
+  if (RAIN_GAP !== 30) throw new Error('RAIN_GAP 30');
+  if (RAIN_DT !== 0.14) throw new Error('RAIN_DT 0.14');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.rainGet !== '捡到雨爆') throw new Error('捡到雨爆');
+  if (TOAST.rainUse !== '雨下来了') throw new Error('雨下来了 toast');
+  if (TOAST.rainRoom !== '雨过去清场') throw new Error('雨过去清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
