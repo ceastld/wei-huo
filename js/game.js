@@ -66,6 +66,10 @@ const CROSS_GAP = 30;
 const CROSS_DT = 0.14;
 const FRAME_S = 120;
 const FRAME_DT = 0.10;
+const COIL_N = 8;
+const COIL_R0 = 50;
+const COIL_DR = 22;
+const COIL_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -162,6 +166,7 @@ const NAMES = {
   star: '星爆',
   cross: '叉爆',
   frame: '框爆',
+  coil: '螺爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -296,6 +301,9 @@ const TOAST = {
   frameGet: '捡到框爆',
   frameUse: '方框绘开了',
   frameRoom: '方框清场',
+  coilGet: '捡到螺爆',
+  coilUse: '螺旋散开了',
+  coilRoom: '螺旋清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -339,6 +347,7 @@ const COL = {
   star: '#ffd24a',
   cross: '#ff5ea8',
   frame: '#7cffd4',
+  coil: '#ff6ad5',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -600,6 +609,7 @@ function lootKind(drop) {
   if (drop === '星爆' || drop === 'star') return 'star';
   if (drop === '叉爆' || drop === 'cross') return 'cross';
   if (drop === '框爆' || drop === 'frame') return 'frame';
+  if (drop === '螺爆' || drop === 'coil') return 'coil';
   return null;
 }
 
@@ -678,6 +688,7 @@ function makeState() {
     starReady: false,
     crossReady: false,
     frameReady: false,
+    coilReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -695,6 +706,7 @@ function makeState() {
     stars: [],
     crosses: [],
     frames: [],
+    coils: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -823,6 +835,7 @@ function resetRoom(s, index, keepHearts) {
   s.starReady = false;
   s.crossReady = false;
   s.frameReady = false;
+  s.coilReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -867,6 +880,8 @@ function resetRoom(s, index, keepHearts) {
   s.crosses.length = 0;
   if (!s.frames) s.frames = [];
   s.frames.length = 0;
+  if (!s.coils) s.coils = [];
+  s.coils.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -992,6 +1007,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '星廊') toast(s, TOAST.starRoom, 1.4, COL.star);
   else if (room.name === '叉廊') toast(s, TOAST.crossRoom, 1.4, COL.cross);
   else if (room.name === '框廊') toast(s, TOAST.frameRoom, 1.4, COL.frame);
+  else if (room.name === '螺廊') toast(s, TOAST.coilRoom, 1.4, COL.coil);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1806,6 +1822,32 @@ function updateFrames(s, dt) {
   }
 }
 
+function updateCoils(s, dt) {
+  if (!s.coils || !s.coils.length) return;
+  const fires = [];
+  for (let i = s.coils.length - 1; i >= 0; i--) {
+    const p = s.coils[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.coils.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.coil, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.coil, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -2013,6 +2055,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.frameReady) {
     s.frameReady = false;
     framing = true;
+  }
+  let coiling = false;
+  if (!forked && s.coilReady) {
+    s.coilReady = false;
+    coiling = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2646,6 +2693,27 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 160);
     }
   }
+  if (coiling) {
+    if (!s.coils) s.coils = [];
+    for (let i = 0; i < COIL_N; i++) {
+      const a = -Math.PI / 2 + i * (Math.PI / 4);
+      const rr = COIL_R0 + i * COIL_DR;
+      s.coils.push({
+        x: Math.round(x + Math.cos(a) * rr),
+        y: Math.round(y + Math.sin(a) * rr),
+        t: COIL_DT * (i + 1),
+        ox: x,
+        oy: y,
+      });
+    }
+    toast(s, TOAST.coilUse, 1.1, COL.coil);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.coil, 170);
+      burst(s, x, y, 4, '#ffffff', 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2924,6 +2992,7 @@ function watchSteer(s, dt) {
   let starIt = null;
   let crossIt = null;
   let frameIt = null;
+  let coilIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2956,8 +3025,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'star') starIt = it;
     if (it.kind === 'cross') crossIt = it;
     if (it.kind === 'frame') frameIt = it;
+    if (it.kind === 'coil') coilIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3107,6 +3177,10 @@ function watchSteer(s, dt) {
   } else if (!s.frameReady && frameIt) {
     tx = frameIt.x - p.x;
     ty = frameIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.coilReady && coilIt) {
+    tx = coilIt.x - p.x;
+    ty = coilIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3293,6 +3367,7 @@ function update(s, dt) {
     updateStars(s, dt);
     updateCrosses(s, dt);
     updateFrames(s, dt);
+    updateCoils(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3320,6 +3395,7 @@ function update(s, dt) {
     updateStars(s, dt);
     updateCrosses(s, dt);
     updateFrames(s, dt);
+    updateCoils(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3439,6 +3515,7 @@ function update(s, dt) {
   updateStars(s, dt);
   updateCrosses(s, dt);
   updateFrames(s, dt);
+  updateCoils(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3675,6 +3752,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.frame, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'coil') {
+      s.coilReady = true;
+      toast(s, TOAST.coilGet, 1.1, COL.coil);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.coil, 130);
+      burst(s, it.x, it.y, 4, '#ffffff', 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -4453,6 +4537,29 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.frame, it.x, it.y - 16);
+    } else if (it.kind === 'coil') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.coil, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.coil;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let k = 0; k < 10; k++) {
+        const a = -Math.PI / 2 + k * 0.55;
+        const rr = 1.1 + k * 0.42;
+        const px = it.x + Math.cos(a) * rr;
+        const py = it.y + Math.sin(a) * rr;
+        if (k === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.fillStyle = COL.coil;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.coil, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -5068,6 +5175,51 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('框', p.x, p.y - 12);
+    }
+  }
+
+  if (s.coils && s.coils.length) {
+    for (let i = 0; i < s.coils.length; i++) {
+      const p = s.coils[i];
+      const maxT = COIL_DT * COIL_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.coil, 0.28);
+      ctx.strokeStyle = COL.coil;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      for (let k = 0; k < 8; k++) {
+        const a = -Math.PI / 2 + k * 0.7;
+        const rr = 1.4 + k * 0.45;
+        const px = p.x + Math.cos(a) * rr;
+        const py = p.y + Math.sin(a) * rr;
+        if (k === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.coil;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.coil;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('螺', p.x, p.y - 12);
     }
   }
 
@@ -5959,6 +6111,29 @@ function draw(s, ctx) {
     ctx.lineWidth = 1.2;
     ctx.strokeRect(fx - 2.4, fy - 2.4, 4.8, 4.8);
   }
+  if (s.coilReady) {
+    let lx;
+    let ly;
+    if (reducedMotion()) {
+      lx = p.x + 14;
+      ly = p.y - 4;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15 + Math.PI * 5.4;
+      lx = p.x + Math.cos(a) * 16;
+      ly = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, lx, ly, 8, COL.coil, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.coil;
+    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.moveTo(lx, ly - 2.2);
+    ctx.quadraticCurveTo(lx + 2.6, ly, lx, ly + 2.2);
+    ctx.stroke();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -6387,6 +6562,18 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (rainEl && s.frameReady && !s.rainReady) {
     rainEl.textContent = NAMES.frame;
   }
+  const coilEl = (typeof document !== 'undefined') ? document.getElementById('coil') : null;
+  if (coilEl) {
+    coilEl.textContent = s.coilReady ? NAMES.coil : '';
+  } else if (frameEl && s.coilReady && !s.frameReady) {
+    frameEl.textContent = NAMES.coil;
+  } else if (crossEl && s.coilReady && !s.crossReady) {
+    crossEl.textContent = NAMES.coil;
+  } else if (starEl && s.coilReady && !s.starReady) {
+    starEl.textContent = NAMES.coil;
+  } else if (waveEl && s.coilReady && !s.waveReady) {
+    waveEl.textContent = NAMES.coil;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -6535,10 +6722,14 @@ function selfCheck() {
   if (CROSS_DT !== 0.14) throw new Error('CROSS_DT 0.14');
   if (FRAME_S !== 120) throw new Error('FRAME_S 120');
   if (FRAME_DT !== 0.10) throw new Error('FRAME_DT 0.10');
+  if (COIL_N !== 8) throw new Error('COIL_N 8');
+  if (COIL_R0 !== 50) throw new Error('COIL_R0 50');
+  if (COIL_DR !== 22) throw new Error('COIL_DR 22');
+  if (COIL_DT !== 0.10) throw new Error('COIL_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 46) throw new Error('need 46 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊'];
+  if (!ROOMS || ROOMS.length !== 47) throw new Error('need 47 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -6620,6 +6811,8 @@ function selfCheck() {
   if (ROOMS[44].name !== '叉廊') throw new Error('room 45 叉廊');
   if (ROOMS[45].id !== 'kuanglang') throw new Error('框廊 id');
   if (ROOMS[45].name !== '框廊') throw new Error('room 46 框廊');
+  if (ROOMS[46].id !== 'luolang') throw new Error('螺廊 id');
+  if (ROOMS[46].name !== '螺廊') throw new Error('room 47 螺廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -6663,6 +6856,9 @@ function selfCheck() {
   if (NAMES.frame !== '框爆') throw new Error('NAMES.frame');
   if (COL.frame !== '#7cffd4') throw new Error('COL.frame');
   if (lootKind('框爆') !== 'frame' || lootKind('frame') !== 'frame') throw new Error('lootKind 框爆');
+  if (NAMES.coil !== '螺爆') throw new Error('NAMES.coil');
+  if (COL.coil !== '#ff6ad5') throw new Error('COL.coil');
+  if (lootKind('螺爆') !== 'coil' || lootKind('coil') !== 'coil') throw new Error('lootKind 螺爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -6685,7 +6881,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -8223,6 +8419,7 @@ function selfCheck() {
   if (lootKind('星爆') !== 'star' || lootKind('star') !== 'star') throw new Error('lootKind 星爆');
   if (lootKind('叉爆') !== 'cross' || lootKind('cross') !== 'cross') throw new Error('lootKind 叉爆');
   if (lootKind('框爆') !== 'frame' || lootKind('frame') !== 'frame') throw new Error('lootKind 框爆');
+  if (lootKind('螺爆') !== 'coil' || lootKind('coil') !== 'coil') throw new Error('lootKind 螺爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -13675,6 +13872,7 @@ function selfCheck() {
   bothP.starReady = true;
   bothP.crossReady = true;
   bothP.frameReady = true;
+  bothP.coilReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -13688,6 +13886,7 @@ function selfCheck() {
   if (bothP.starReady) throw new Error('same boom spends 星爆');
   if (bothP.crossReady) throw new Error('same boom spends 叉爆');
   if (bothP.frameReady) throw new Error('same boom spends 框爆');
+  if (bothP.coilReady) throw new Error('same boom spends 螺爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -13697,6 +13896,7 @@ function selfCheck() {
   if (!bothP.stars || bothP.stars.length !== STAR_N * 4) throw new Error('same boom stars');
   if (!bothP.crosses || bothP.crosses.length !== CROSS_N * 4) throw new Error('same boom crosses');
   if (!bothP.frames || bothP.frames.length !== 8) throw new Error('same boom frames');
+  if (!bothP.coils || bothP.coils.length !== COIL_N) throw new Error('same boom coils');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -15241,6 +15441,12 @@ function selfCheck() {
   cha.hitstop = 0;
   updateFrames(cha, FRAME_DT * 8 + 0.05);
   if (cha.crossReady !== true) throw new Error('叉廊 frame-seat does not consume');
+  cha.coilReady = true;
+  explode(cha, 200, 200, false);
+  cha.crossReady = true;
+  cha.hitstop = 0;
+  updateCoils(cha, COIL_DT * COIL_N + 0.05);
+  if (cha.crossReady !== true) throw new Error('叉廊 coil-seat does not consume');
   cha.waters = [];
   explode(cha, chaBox.x + chaBox.w * 0.5, chaBox.y - 20, false);
   if (!chaBox.open) throw new Error('叉廊 dry trail should open 心核');
@@ -15289,6 +15495,7 @@ function selfCheck() {
   let kuaWaveItem = 0;
   let kuaSpringItem = 0;
   let kuaRainItem = 0;
+  let kuaCoilItem = 0;
   for (let i = 0; i < kua.crates.length; i++) {
     if (kua.crates[i].loot === 'core') kuaCore += 1;
     if (kua.crates[i].loot === 'heal') kuaHeal += 1;
@@ -15301,9 +15508,10 @@ function selfCheck() {
     if (kua.items[i].kind === 'wave') kuaWaveItem += 1;
     if (kua.items[i].kind === 'spring') kuaSpringItem += 1;
     if (kua.items[i].kind === 'rain') kuaRainItem += 1;
+    if (kua.items[i].kind === 'coil') kuaCoilItem += 1;
   }
   if (kuaFrameItem < 1) throw new Error('框廊 needs 框爆');
-  if (kuaCrossItem || kuaStarItem || kuaWaveItem || kuaSpringItem || kuaRainItem) throw new Error('框廊 no extra pickup');
+  if (kuaCrossItem || kuaStarItem || kuaWaveItem || kuaSpringItem || kuaRainItem || kuaCoilItem) throw new Error('框廊 no extra pickup');
   if (kuaCore !== 1) throw new Error('框廊 心核');
   if (kuaHeal < 1) throw new Error('框廊 回星');
   const kuaBox = kua.crates.find(function (c) { return c.loot === 'core'; });
@@ -15566,11 +15774,20 @@ function selfCheck() {
   kua.hitstop = 0;
   updateSpins(kua, SPIN_DT * SPIN_N + 0.05);
   if (kua.frameReady !== true) throw new Error('框廊 spin-orbit does not consume');
+  kua.coilReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateCoils(kua, COIL_DT * COIL_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 coil-seat does not consume');
   kua.waters = [];
   explode(kua, kuaBox.x + kuaBox.w * 0.5, kuaBox.y - 20, false);
   if (!kuaBox.open) throw new Error('框廊 dry trail should open 心核');
   takeCore(kua, { x: 100, y: 100 });
-  if (!kua.won || kua.toast !== TOAST.all) throw new Error('框廊 should 通关');
+  if (kua.won) throw new Error('框廊 should not 通关');
+  if (kua.toast !== TOAST.core) throw new Error('框廊 过关');
+  for (let i = 0; i < 20; i++) update(kua, 0.1);
+  if (kua.roomName !== '螺廊') throw new Error('core advances to 螺廊');
   const hudKua = makeState();
   resetRoom(hudKua, 45, false);
   if (roomHudText(hudKua).indexOf('框廊 · 46/') !== 0) throw new Error('HUD 框廊 46/n');
@@ -15583,6 +15800,325 @@ function selfCheck() {
   if (TOAST.frameGet !== '捡到框爆') throw new Error('捡到框爆');
   if (TOAST.frameUse !== '方框绘开了') throw new Error('方框绘开了 toast');
   if (TOAST.frameRoom !== '方框清场') throw new Error('方框清场');
+
+  const luo = makeState();
+  resetRoom(luo, 46, false);
+  if (luo.roomName !== '螺廊' || luo.roomId !== 'luolang') throw new Error('luolang load');
+  if (luo.toast !== TOAST.coilRoom) throw new Error('螺廊 intro');
+  if (luo.roomW !== 960 || luo.roomH !== 400) throw new Error('螺廊 size');
+  if (luo.player.x !== 80 || luo.player.y !== 200) throw new Error('螺廊 spawn');
+  if (luo.coilReady) throw new Error('螺廊 coil starts false');
+  if (!luo.coils || luo.coils.length) throw new Error('螺廊 coils start empty');
+  let luoStill = 0;
+  let luoTide = 0;
+  for (let i = 0; i < luo.waters.length; i++) {
+    if (luo.waters[i].tide) luoTide += 1;
+    else luoStill += 1;
+  }
+  if (luoStill < 1) throw new Error('螺廊 needs static 水洼');
+  if (luoTide) throw new Error('螺廊 no tide');
+  let luoCore = 0;
+  let luoHeal = 0;
+  let luoThick = 0;
+  let luoCoilItem = 0;
+  let luoFrameItem = 0;
+  let luoCrossItem = 0;
+  let luoStarItem = 0;
+  let luoWaveItem = 0;
+  for (let i = 0; i < luo.crates.length; i++) {
+    if (luo.crates[i].loot === 'core') luoCore += 1;
+    if (luo.crates[i].loot === 'heal') luoHeal += 1;
+    if (luo.crates[i].thick) luoThick += 1;
+  }
+  for (let i = 0; i < luo.items.length; i++) {
+    if (luo.items[i].kind === 'coil') luoCoilItem += 1;
+    if (luo.items[i].kind === 'frame') luoFrameItem += 1;
+    if (luo.items[i].kind === 'cross') luoCrossItem += 1;
+    if (luo.items[i].kind === 'star') luoStarItem += 1;
+    if (luo.items[i].kind === 'wave') luoWaveItem += 1;
+  }
+  if (luoCoilItem < 1) throw new Error('螺廊 needs 螺爆');
+  if (luoFrameItem || luoCrossItem || luoStarItem || luoWaveItem) throw new Error('螺廊 no extra pickup');
+  if (luoCore !== 1) throw new Error('螺廊 心核');
+  if (luoHeal < 1) throw new Error('螺廊 回星');
+  const luoBox = luo.crates.find(function (c) { return c.loot === 'core'; });
+  if (!luoBox || luoBox.thick) throw new Error('螺廊 心核 crate is not thick');
+  if (luoThick) throw new Error('螺廊 no thick crate');
+  let luoHound = 0;
+  let luoGuard = 0;
+  let luoMoth = 0;
+  let luoEater = 0;
+  let luoShell = 0;
+  let luoBoomer = 0;
+  for (let i = 0; i < luo.enemies.length; i++) {
+    if (isHound(luo.enemies[i])) luoHound += 1;
+    else if (isMoth(luo.enemies[i])) luoMoth += 1;
+    else if (isEater(luo.enemies[i])) luoEater += 1;
+    else if (isShell(luo.enemies[i])) luoShell += 1;
+    else if (isBoomer(luo.enemies[i])) luoBoomer += 1;
+    else luoGuard += 1;
+  }
+  if (luoGuard !== 4 || luoHound !== 0 || luoMoth !== 0 || luoEater !== 0 || luoShell !== 0 || luoBoomer !== 0) {
+    throw new Error('螺廊 烬卫 only');
+  }
+  if (inWater(luo, 80, 200) || inOil(luo, 80, 200)) throw new Error('螺廊 spawn dry');
+  if (inWater(luo, 200, 200) || inOil(luo, 200, 200)) throw new Error('螺廊 螺爆 dry');
+  if (inWater(luo, 400, 200) || inOil(luo, 400, 200)) throw new Error('螺廊 plant dry');
+  if (inOil(luo, 880, 200) || inWater(luo, 880, 200)) throw new Error('螺廊 core dry');
+  if (inWater(luo, 482, 282) || inOil(luo, 482, 282)) throw new Error('螺廊 烬卫 dry SE');
+  if (inWater(luo, 400, 338) || inOil(luo, 400, 338)) throw new Error('螺廊 烬卫 dry S');
+  if (inWater(luo, 287, 313) || inOil(luo, 287, 313)) throw new Error('螺廊 烬卫 dry SW');
+  if (inWater(luo, 256, 56) || inOil(luo, 256, 56)) throw new Error('螺廊 烬卫 dry NW');
+  if (!inWater(luo, 750, 365)) throw new Error('螺廊 wet bag');
+  if (inWater(luo, 80, 200)) throw new Error('螺廊 west pocket wet');
+  for (let i = 0; i < luo.crates.length; i++) {
+    const c = luo.crates[i];
+    if (circleRect(luo.player.x, luo.player.y, luo.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('螺廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 400; x += 10) {
+    for (let i = 0; i < luo.crates.length; i++) {
+      const c = luo.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('螺廊 crate on dry walk');
+      }
+    }
+  }
+  const luoSE = luo.enemies.find(function (e) { return Math.abs(e.x - 482) < 1 && Math.abs(e.y - 282) < 1; });
+  const luoS = luo.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 338) < 1; });
+  const luoSW = luo.enemies.find(function (e) { return Math.abs(e.x - 287) < 1 && Math.abs(e.y - 313) < 1; });
+  const luoNW = luo.enemies.find(function (e) { return Math.abs(e.x - 256) < 1 && Math.abs(e.y - 56) < 1; });
+  if (!luoSE || !luoS || !luoSW || !luoNW) throw new Error('螺廊 four 烬卫 seats');
+  const luoSeats = [luoSE, luoS, luoSW, luoNW];
+  for (let i = 0; i < luoSeats.length; i++) {
+    const e = luoSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('螺廊 primary misses 烬卫');
+    if (e.x < 40 || e.y < 40 || e.x > 960 - 40 || e.y > 400 - 40) throw new Error('螺廊 烬卫 margin');
+  }
+  const coilSeatPos = [];
+  for (let i = 0; i < COIL_N; i++) {
+    const a = -Math.PI / 2 + i * (Math.PI / 4);
+    const rr = COIL_R0 + i * COIL_DR;
+    coilSeatPos.push([Math.round(400 + Math.cos(a) * rr), Math.round(200 + Math.sin(a) * rr)]);
+  }
+  for (let i = 0; i < luoSeats.length; i++) {
+    const e = luoSeats[i];
+    let hit = false;
+    for (let k = 0; k < coilSeatPos.length; k++) {
+      if (dist(e.x, e.y, coilSeatPos[k][0], coilSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('螺廊 hot coil reaches 烬卫');
+  }
+  const luoGround = luo.items.find(function (it) { return it.kind === 'coil' && !it.taken; });
+  if (!luoGround) throw new Error('螺廊 ground 螺爆 present');
+  let luoPickGuard = 1e9;
+  for (let i = 0; i < luoSeats.length; i++) {
+    const d = dist(luoGround.x, luoGround.y, luoSeats[i].x, luoSeats[i].y);
+    if (d < luoPickGuard) luoPickGuard = d;
+  }
+  if (luoPickGuard <= HOT_BLAST_R + ENEMY_R) throw new Error('螺廊 pickup too close to seat');
+  const luoCoreCx = luoBox.x + luoBox.w * 0.5;
+  const luoCoreCy = luoBox.y + luoBox.h * 0.5;
+  if (!(dist(luoCoreCx, luoCoreCy, 400, 200) > HOT_BLAST_R)) throw new Error('螺廊 core outside plant blast');
+  if (!(dist(luoCoreCx, luoCoreCy, 218, 200) > HOT_BLAST_R)) throw new Error('螺廊 core outside W seat');
+  luo.player.x = 80;
+  luo.player.y = 200;
+  luo.player.hearts = 3;
+  luo.player.inv = 2;
+  luo.hitstop = 0;
+  luo.embers.length = 0;
+  luo.player.x = luoGround.x;
+  luo.player.y = luoGround.y;
+  update(luo, 0.016);
+  if (luo.coilReady !== true) throw new Error('pick coil → coilReady');
+  if (luo.toast !== TOAST.coilGet) throw new Error('捡到螺爆 room');
+  luo.player.x = 80;
+  luo.player.y = 200;
+  luo.player.inv = 2;
+  luo.hitstop = 0;
+  luo.embers.length = 0;
+  const luoHpSE = luoSE.hp;
+  const luoHpS = luoS.hp;
+  const luoHpSW = luoSW.hp;
+  const luoHpNW = luoNW.hp;
+  explode(luo, 400, 200, false);
+  if (luo.coilReady) throw new Error('螺廊 coil spends');
+  if (luo.toast !== TOAST.coilUse) throw new Error('螺旋散开了 room');
+  if (!luo.coils || luo.coils.length !== 8) throw new Error('螺廊 coils queued');
+  if (Math.abs(luo.coils[0].x - 400) > 1e-6 || Math.abs(luo.coils[0].y - 150) > 1e-6) throw new Error('螺廊 N');
+  if (Math.abs(luo.coils[1].x - 451) > 1e-6 || Math.abs(luo.coils[1].y - 149) > 1e-6) throw new Error('螺廊 NE');
+  if (Math.abs(luo.coils[2].x - 494) > 1e-6 || Math.abs(luo.coils[2].y - 200) > 1e-6) throw new Error('螺廊 E');
+  if (Math.abs(luo.coils[3].x - 482) > 1e-6 || Math.abs(luo.coils[3].y - 282) > 1e-6) throw new Error('螺廊 SE');
+  if (Math.abs(luo.coils[4].x - 400) > 1e-6 || Math.abs(luo.coils[4].y - 338) > 1e-6) throw new Error('螺廊 S');
+  if (Math.abs(luo.coils[5].x - 287) > 1e-6 || Math.abs(luo.coils[5].y - 313) > 1e-6) throw new Error('螺廊 SW');
+  if (Math.abs(luo.coils[6].x - 218) > 1e-6 || Math.abs(luo.coils[6].y - 200) > 1e-6) throw new Error('螺廊 W');
+  if (Math.abs(luo.coils[7].x - 256) > 1e-6 || Math.abs(luo.coils[7].y - 56) > 1e-6) throw new Error('螺廊 NW');
+  if (Math.abs(luo.coils[0].t - COIL_DT) > 1e-6) throw new Error('螺廊 dt 1');
+  if (Math.abs(luo.coils[1].t - COIL_DT * 2) > 1e-6) throw new Error('螺廊 dt 2');
+  if (Math.abs(luo.coils[7].t - COIL_DT * 8) > 1e-6) throw new Error('螺廊 dt 8');
+  if (luoSE.hp !== luoHpSE || luoS.hp !== luoHpS || luoSW.hp !== luoHpSW || luoNW.hp !== luoHpNW) {
+    throw new Error('螺廊 primary misses');
+  }
+  luo.hitstop = 0;
+  updateCoils(luo, COIL_DT + 0.01);
+  if (luo.coils.length !== 7) throw new Error('螺廊 first coil N');
+  if (luoSE.hp !== luoHpSE) throw new Error('螺廊 N misses SE');
+  luoSE.x = 482;
+  luoSE.y = 282;
+  luoS.x = 400;
+  luoS.y = 338;
+  luoSW.x = 287;
+  luoSW.y = 313;
+  luoNW.x = 256;
+  luoNW.y = 56;
+  luo.hitstop = 0;
+  updateCoils(luo, COIL_DT * 7 + 0.05);
+  if (luo.coils.length !== 0) throw new Error('螺廊 coils finish');
+  if (!(luoSE.hp === luoHpSE - 2 || luoSE.hp <= 0)) throw new Error('螺廊 coil dmg SE');
+  if (!(luoS.hp === luoHpS - 2 || luoS.hp <= 0)) throw new Error('螺廊 coil dmg S');
+  if (!(luoSW.hp === luoHpSW - 2 || luoSW.hp <= 0)) throw new Error('螺廊 coil dmg SW');
+  if (!(luoNW.hp === luoHpNW - 2 || luoNW.hp <= 0)) throw new Error('螺廊 coil dmg NW');
+  luo.coilReady = true;
+  dropSpark(luo, 300, 200, false);
+  if (luo.coilReady !== true) throw new Error('dropSpark keeps 螺爆');
+  luo.input.dash = true;
+  luo.player.dashT = 0;
+  luo.player.dashCd = 0;
+  luo.hitstop = 0;
+  update(luo, 0.016);
+  if (luo.coilReady !== true) throw new Error('dash does not consume 螺爆');
+  const coilSelf = makeState();
+  resetRoom(coilSelf, 0, false);
+  coilSelf.coilReady = true;
+  coilSelf.player.x = 400;
+  coilSelf.player.y = 150;
+  coilSelf.player.inv = 0;
+  coilSelf.player.hearts = 3;
+  explode(coilSelf, 400, 200, false);
+  if (coilSelf.player.hearts !== 3) throw new Error('primary dry misses player for coil');
+  coilSelf.hitstop = 0;
+  updateCoils(coilSelf, COIL_DT + 0.01);
+  if (coilSelf.player.hearts !== 2) throw new Error('own coil hurts player');
+  coilSelf.player.hearts = 3;
+  coilSelf.player.inv = 0;
+  coilSelf.player.dashT = DASH_TIME;
+  coilSelf.coils = [{ x: 400, y: 150, t: 0, ox: 400, oy: 200 }];
+  coilSelf.hitstop = 0;
+  updateCoils(coilSelf, 0.02);
+  if (coilSelf.player.hearts !== 3) throw new Error('dash i-frames skip coil');
+  luo.coilReady = true;
+  luo.sparks.length = 0;
+  if (luo.coils) luo.coils.length = 0;
+  luo.player.x = 80;
+  luo.player.y = 200;
+  luo.player.dashT = 0;
+  luo.player.dashCd = 0;
+  luo.player.vx = 0;
+  luo.player.vy = 0;
+  luo.player.inv = 2;
+  luo.input.x = 0;
+  luo.input.y = 0;
+  luo.input.dash = false;
+  luo.hitstop = 0;
+  luo.waters = [{ x: 80, y: 180, w: 80, h: 80 }];
+  dropSpark(luo, 120, 200, false);
+  if (!luo.sparks[luo.sparks.length - 1].wet) throw new Error('螺廊 wet spark');
+  const luoBooms = luo.stats.booms;
+  for (let i = 0; i < 24; i++) update(luo, 0.1);
+  if (luo.coilReady !== true) throw new Error('螺廊 wet fizzle does not consume');
+  if (luo.stats.booms !== luoBooms) throw new Error('螺廊 wet no extra boom');
+  luo.waters = [];
+  explode(luo, 200, 200, false, false, false, { fork: true });
+  if (luo.coilReady !== true) throw new Error('螺廊 fork does not consume');
+  luo.echoReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  for (let i = 0; i < 12; i++) update(luo, 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 echo does not consume');
+  luo.fanReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateFans(luo, FAN_DT * FAN_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 fan-fork does not consume');
+  luo.drumReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateDrums(luo, 0.55);
+  if (luo.coilReady !== true) throw new Error('螺廊 drum-wave does not consume');
+  luo.pulseReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updatePulses(luo, PULSE_DT * PULSE_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 pulse-aftershock does not consume');
+  luo.rainReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateRains(luo, RAIN_DT * RAIN_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 rain-drop does not consume');
+  luo.springReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateSprings(luo, SPRING_DT * SPRING_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 spring-jet does not consume');
+  luo.waveReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateWaves(luo, WAVE_DT * WAVE_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 wave-seat does not consume');
+  luo.starReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateStars(luo, STAR_DT * STAR_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 star-seat does not consume');
+  luo.crossReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateCrosses(luo, CROSS_DT * CROSS_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 cross-seat does not consume');
+  luo.frameReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateFrames(luo, FRAME_DT * 8 + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 frame-seat does not consume');
+  luo.spinReady = true;
+  explode(luo, 200, 200, false);
+  luo.coilReady = true;
+  luo.hitstop = 0;
+  updateSpins(luo, SPIN_DT * SPIN_N + 0.05);
+  if (luo.coilReady !== true) throw new Error('螺廊 spin-orbit does not consume');
+  luo.waters = [];
+  explode(luo, luoBox.x + luoBox.w * 0.5, luoBox.y - 20, false);
+  if (!luoBox.open) throw new Error('螺廊 dry trail should open 心核');
+  takeCore(luo, { x: 100, y: 100 });
+  if (!luo.won || luo.toast !== TOAST.all) throw new Error('螺廊 should 通关');
+  const hudLuo = makeState();
+  resetRoom(hudLuo, 46, false);
+  if (roomHudText(hudLuo).indexOf('螺廊 · 47/') !== 0) throw new Error('HUD 螺廊 47/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (COIL_N !== 8) throw new Error('COIL_N 8');
+  if (COIL_R0 !== 50) throw new Error('COIL_R0 50');
+  if (COIL_DR !== 22) throw new Error('COIL_DR 22');
+  if (COIL_DT !== 0.10) throw new Error('COIL_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.coilGet !== '捡到螺爆') throw new Error('捡到螺爆');
+  if (TOAST.coilUse !== '螺旋散开了') throw new Error('螺旋散开了 toast');
+  if (TOAST.coilRoom !== '螺旋清场') throw new Error('螺旋清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
