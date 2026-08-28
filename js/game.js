@@ -32,6 +32,11 @@ const MOTH_R = 9;
 const MOTH_IDLE = 16;
 const MOTH_SEEK = 236;
 const MOTH_SEEK_T = 1.2;
+const EATER_HP = 2;
+const EATER_R = 11;
+const EATER_IDLE = 18;
+const EATER_SEEK = 96;
+const EATER_EAT = 16;
 const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
 const HEART_MAX = 3;
 const HITSTOP = 0.08;
@@ -60,6 +65,7 @@ const NAMES = {
   watch: '观摩',
   seed: '焰种',
   haste: '急燃',
+  eater: '拾烬',
 };
 
 const TOAST = {
@@ -105,6 +111,9 @@ const TOAST = {
   hasteGet: '急燃到手',
   hasteUse: '急燃爆了',
   hasteRoom: '急燃先爆',
+  eater: '拾烬倒了',
+  eaterEat: '拾烬吃辙',
+  eaterRoom: '拾烬会吃辙',
 };
 
 const COL = {
@@ -114,6 +123,7 @@ const COL = {
   haste: '#ff9a3c',
   water: '#3a6b8c',
   oil: '#8a4a12',
+  eater: '#9a6ab0',
   core: '#ff5d8f',
   heart: '#ff5d8f',
   ash: '#6b5344',
@@ -339,6 +349,7 @@ function makeState() {
     time: 0,
     taughtDash: false,
     taughtOil: false,
+    taughtEat: false,
     chainToastT: 0,
     lastBoomX: null,
     lastBoomY: null,
@@ -418,6 +429,7 @@ function resetRoom(s, index, keepHearts) {
   s.tideT = 0;
   s.tideHigh = false;
   s.taughtOil = false;
+  s.taughtEat = false;
   s.waters = (room.puddles || []).map(function (p) {
     return { x: p.x, y: p.y, w: p.w, h: p.h, tide: !!p.tide };
   });
@@ -448,10 +460,11 @@ function resetRoom(s, index, keepHearts) {
     const kind = e.type || e.kind || NAMES.enemy;
     const hound = kind === NAMES.hound;
     const moth = kind === NAMES.moth;
+    const eater = kind === NAMES.eater;
     return {
       x: e.x, y: e.y,
-      r: moth ? MOTH_R : (hound ? 12 : ENEMY_R),
-      hp: moth ? MOTH_HP : (hound ? HOUND_HP : ENEMY_HP),
+      r: moth ? MOTH_R : (eater ? EATER_R : (hound ? 12 : ENEMY_R)),
+      hp: moth ? MOTH_HP : (eater ? EATER_HP : (hound ? HOUND_HP : ENEMY_HP)),
       hitT: 0,
       kind: kind,
       faceX: 1,
@@ -471,6 +484,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '种廊') toast(s, TOAST.seed, 1.4, COL.gold);
   else if (room.name === '油廊') toast(s, TOAST.oilRoom, 1.4, COL.gold);
   else if (room.name === '急廊') toast(s, TOAST.hasteRoom, 1.4, COL.haste);
+  else if (room.name === '拾廊') toast(s, TOAST.eaterRoom, 1.4, COL.eater);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -485,6 +499,10 @@ function isMoth(e) {
   return e.kind === NAMES.moth;
 }
 
+function isEater(e) {
+  return e.kind === NAMES.eater;
+}
+
 function updateMoth(s, e, dt) {
   e.flutter = (e.flutter || 0) + dt;
   let tx = e.x;
@@ -494,6 +512,51 @@ function updateMoth(s, e, dt) {
     tx = s.lastBoomX;
     ty = s.lastBoomY;
     speed = MOTH_SEEK;
+  } else {
+    const a = e.flutter * 3.4;
+    tx = e.x + Math.cos(a) * 6;
+    ty = e.y + Math.sin(a) * 5;
+  }
+  const d = dist(e.x, e.y, tx, ty);
+  if (d > 0.5) {
+    e.faceX = (tx - e.x) / d;
+    e.faceY = (ty - e.y) / d;
+    e.x += e.faceX * speed * dt;
+    e.y += e.faceY * speed * dt;
+  }
+}
+
+function updateEater(s, e, dt) {
+  e.flutter = (e.flutter || 0) + dt;
+  let prey = null;
+  let nd = 1e9;
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (k.dead || k.wet) continue;
+    const dE = dist(e.x, e.y, k.x, k.y);
+    if (dE < nd) {
+      nd = dE;
+      prey = k;
+    }
+  }
+  let tx = e.x;
+  let ty = e.y;
+  let speed = EATER_IDLE;
+  if (prey) {
+    tx = prey.x;
+    ty = prey.y;
+    speed = EATER_SEEK;
+    if (nd < EATER_EAT) {
+      prey.dead = true;
+      burst(s, prey.x, prey.y, 4, COL.ash, 80);
+      burst(s, prey.x, prey.y, 4, COL.eater, 80);
+      sfx('fizzle');
+      if (!s.taughtEat) {
+        toast(s, TOAST.eaterEat, 1.1, COL.eater);
+        s.taughtEat = true;
+      }
+      punch(s, 3);
+    }
   } else {
     const a = e.flutter * 3.4;
     tx = e.x + Math.cos(a) * 6;
@@ -705,6 +768,23 @@ function hurtPlayer(s, srcX, srcY, why) {
   return true;
 }
 
+function foeDown(s, e) {
+  if (isEater(e)) {
+    burst(s, e.x, e.y, 8, COL.eater, 140);
+    burst(s, e.x, e.y, 6, COL.ash, 110);
+    toast(s, TOAST.eater, 1.1, COL.eater);
+  } else if (isMoth(e)) {
+    burst(s, e.x, e.y, 10, COL.gold, 140);
+    toast(s, TOAST.moth, 1.1, COL.gold);
+  } else if (isHound(e)) {
+    burst(s, e.x, e.y, 12, COL.ember, 140);
+    toast(s, TOAST.hound, 1.1, COL.ember);
+  } else {
+    burst(s, e.x, e.y, 12, COL.ember, 140);
+    toast(s, TOAST.foe, 1.1, COL.ember);
+  }
+}
+
 function spawnEmber(s, x, y, r, hot) {
   s.embers.push({
     x: x, y: y, r: r,
@@ -745,10 +825,7 @@ function hurtEnemyFromEmber(s, e, em) {
   e.y += ((e.y - em.y) / d) * 14;
   s.hitstop = Math.max(s.hitstop, hitstopAmt());
   punch(s, 4);
-  if (e.hp <= 0) {
-    burst(s, e.x, e.y, isMoth(e) ? 10 : 12, isMoth(e) ? COL.gold : COL.ember, 140);
-    toast(s, isMoth(e) ? TOAST.moth : (isHound(e) ? TOAST.hound : TOAST.foe), 1.1, isMoth(e) ? COL.gold : COL.ember);
-  }
+  if (e.hp <= 0) foeDown(s, e);
 }
 
 function updateEmbers(s, dt, canHurt) {
@@ -798,7 +875,7 @@ function explode(s, x, y, hot, fused, haste) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     if (dist(e.x, e.y, x, y) <= r + e.r) {
-      e.hp -= (isHound(e) || isMoth(e)) ? 1 : (hot ? 2 : 1);
+      e.hp -= (isHound(e) || isMoth(e) || isEater(e)) ? 1 : (hot ? 2 : 1);
       e.hitT = 0.18;
       const d = dist(e.x, e.y, x, y) || 1;
       e.x += ((e.x - x) / d) * 22;
@@ -806,10 +883,7 @@ function explode(s, x, y, hot, fused, haste) {
       s.hitstop = Math.max(s.hitstop, hitstopAmt());
       punch(s, 6);
       hit = true;
-      if (e.hp <= 0) {
-        burst(s, e.x, e.y, isMoth(e) ? 10 : 12, isMoth(e) ? COL.gold : COL.ember, 140);
-        toast(s, isMoth(e) ? TOAST.moth : (isHound(e) ? TOAST.hound : TOAST.foe), 1.1, isMoth(e) ? COL.gold : COL.ember);
-      }
+      if (e.hp <= 0) foeDown(s, e);
     }
   }
 
@@ -1054,7 +1128,7 @@ function watchSteer(s, dt) {
   let gd = 1e9;
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
-    if (e.hp <= 0 || isHound(e) || isMoth(e)) continue;
+    if (e.hp <= 0 || isHound(e) || isMoth(e) || isEater(e)) continue;
     const d = dist(p.x, p.y, e.x, e.y);
     if (d < gd) {
       gd = d;
@@ -1322,6 +1396,7 @@ function update(s, dt) {
     if (e.hitT > 0) e.hitT -= dt;
     if (isHound(e)) updateHound(s, e, dt);
     else if (isMoth(e)) updateMoth(s, e, dt);
+    else if (isEater(e)) updateEater(s, e, dt);
     else {
       const d = dist(e.x, e.y, p.x, p.y) || 1;
       e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
@@ -1706,6 +1781,41 @@ function draw(s, ctx) {
       }
       continue;
     }
+    if (isEater(e)) {
+      const flick = reducedMotion() ? 1 : (0.85 + 0.15 * Math.sin(s.time * 8 + e.x * 0.02));
+      glow(ctx, e.x, e.y, 18, COL.eater, 0.2 * flick);
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.rotate(Math.atan2(e.faceY || 0, e.faceX || 1));
+      ctx.fillStyle = flash ? COL.gold : COL.eater;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 9.2, 6.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(8.2, 0, 5.2, 3.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#6e3f82';
+      ctx.lineWidth = 1.5 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(-5, 0);
+      ctx.lineTo(4, 0);
+      ctx.stroke();
+      ctx.fillStyle = flash ? '#fff8dc' : '#2a1410';
+      ctx.beginPath();
+      ctx.arc(9.2, -1.5, 1.15, 0, Math.PI * 2);
+      ctx.arc(9.2, 1.5, 1.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = COL.eater;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.eater, e.x, e.y + e.r + 12);
+      for (let h = 0; h < EATER_HP; h++) {
+        ctx.fillStyle = h < e.hp ? COL.eater : 'rgba(154,106,176,0.2)';
+        ctx.fillRect(e.x - 9 + h * 10, e.y + e.r + 14, 8, 3);
+      }
+      continue;
+    }
     glow(ctx, e.x, e.y, 22, COL.ember, 0.18);
     ctx.beginPath();
     ctx.fillStyle = flash ? COL.gold : '#2a1410';
@@ -2056,8 +2166,8 @@ function selfCheck() {
   if (HASTE_T !== 0.55) throw new Error('HASTE_T 0.55');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 17) throw new Error('need 17 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊'];
+  if (!ROOMS || ROOMS.length !== 18) throw new Error('need 18 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -2081,6 +2191,8 @@ function selfCheck() {
   if (ROOMS[15].name !== '油廊') throw new Error('room 16 油廊');
   if (ROOMS[16].id !== 'jilang') throw new Error('急廊 id');
   if (ROOMS[16].name !== '急廊') throw new Error('room 17 急廊');
+  if (ROOMS[17].id !== 'shilang') throw new Error('拾廊 id');
+  if (ROOMS[17].name !== '拾廊') throw new Error('room 18 拾廊');
   if (SEED_R !== 72) throw new Error('SEED_R 72');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
@@ -2093,7 +2205,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -2115,6 +2227,16 @@ function selfCheck() {
   if (NAMES.scorch !== '焦痕') throw new Error('焦痕 exists');
   if (NAMES.watch !== '观摩') throw new Error('观摩 name');
   if (TOAST.watch !== '观摩中') throw new Error('观摩中');
+  if (NAMES.eater !== '拾烬') throw new Error('拾烬 name');
+  if (TOAST.eater !== '拾烬倒了') throw new Error('拾烬倒了');
+  if (TOAST.eaterEat !== '拾烬吃辙') throw new Error('拾烬吃辙');
+  if (TOAST.eaterRoom !== '拾烬会吃辙') throw new Error('拾烬会吃辙');
+  if (COL.eater !== '#9a6ab0') throw new Error('COL.eater');
+  if (EATER_HP !== 2) throw new Error('拾烬 2 HP');
+  if (EATER_R !== 11) throw new Error('EATER_R');
+  if (EATER_IDLE !== 18) throw new Error('EATER_IDLE');
+  if (EATER_SEEK !== 96) throw new Error('EATER_SEEK');
+  if (EATER_EAT !== 16) throw new Error('EATER_EAT');
 
   if (typeof setWatch !== 'function' || typeof watchSteer !== 'function') {
     throw new Error('观摩 helpers');
@@ -2125,16 +2247,19 @@ function selfCheck() {
   if (inputSrc.indexOf("e.code === 'KeyA'") >= 0) throw new Error('A must not toggle 观摩');
   let houndN = 0;
   let mothN = 0;
+  let eaterN = 0;
   for (let r = 0; r < ROOMS.length; r++) {
     const ens = ROOMS[r].enemies || [];
     for (let j = 0; j < ens.length; j++) {
       const k = ens[j].type || ens[j].kind;
       if (k === '循辙') houndN += 1;
       if (k === '灯蛾') mothN += 1;
+      if (k === '拾烬') eaterN += 1;
     }
   }
   if (houndN < 1) throw new Error('循辙 exists');
   if (mothN < 1) throw new Error('灯蛾 exists');
+  if (eaterN < 1) throw new Error('拾烬 exists');
   if (MOTH_SEEK_T !== 1.2) throw new Error('灯蛾 seek 1.2s');
   if (MOTH_HP !== 2) throw new Error('灯蛾 2 HP');
   const scan = blob + NAMES.hint + '尾火过关失败通关循辙倒了' + want.join('');
@@ -2227,10 +2352,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/17') throw new Error('HUD 空场 1/17');
+  if (roomHudText(hud0) !== '空场 · 1/18') throw new Error('HUD 空场 1/18');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/17') throw new Error('HUD 3/17');
+  if (roomHudText(hud2) !== '水巷 · 3/18') throw new Error('HUD 3/18');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -2442,7 +2567,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/17') throw new Error('HUD 灰径 11/17');
+  if (roomHudText(hudAsh) !== '灰径 · 11/18') throw new Error('HUD 灰径 11/18');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -2469,7 +2594,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/17') throw new Error('HUD 环行 12/17');
+  if (roomHudText(hudRing) !== '环行 · 12/18') throw new Error('HUD 环行 12/18');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -2498,7 +2623,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/17') throw new Error('HUD 密线 13/17');
+  if (roomHudText(hudWire) !== '密线 · 13/18') throw new Error('HUD 密线 13/18');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -2814,7 +2939,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/17') throw new Error('HUD 潮廊 14/17');
+  if (roomHudText(hudChao) !== '潮廊 · 14/18') throw new Error('HUD 潮廊 14/18');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -2881,7 +3006,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/17') throw new Error('HUD 种廊 15/17');
+  if (roomHudText(hudZhong) !== '种廊 · 15/18') throw new Error('HUD 种廊 15/18');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -3008,7 +3133,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/17') throw new Error('HUD 油廊 16/17');
+  if (roomHudText(hudYou) !== '油廊 · 16/18') throw new Error('HUD 油廊 16/18');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -3081,10 +3206,12 @@ function selfCheck() {
   explode(ji, jBox.x + jBox.w * 0.5, jBox.y - 20, false);
   if (!jBox.open) throw new Error('急廊 dry trail should open 心核');
   takeCore(ji, { x: 100, y: 100 });
-  if (!ji.won || ji.toast !== TOAST.all) throw new Error('急廊 should 通关');
+  if (ji.won) throw new Error('急廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(ji, 0.1);
+  if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/17') throw new Error('HUD 急廊 17/17');
+  if (roomHudText(hudJi) !== '急廊 · 17/18') throw new Error('HUD 急廊 17/18');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -3247,6 +3374,165 @@ function selfCheck() {
   if (!inWater(tideU, 240, 220)) throw new Error('still high after fizzle');
   for (let i = 0; i < 28; i++) update(tideU, 0.05);
   if (inWater(tideU, 240, 220)) throw new Error('inWater false after fall');
+
+  if (typeof updateEater !== 'function' || typeof isEater !== 'function') {
+    throw new Error('拾烬 helpers');
+  }
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+
+  const eat = makeState();
+  resetRoom(eat, 0, false);
+  eat.player.x = 40;
+  eat.player.y = 40;
+  eat.player.inv = 2;
+  eat.enemies.push({
+    x: 280, y: 200, r: EATER_R, hp: EATER_HP, hitT: 0,
+    kind: NAMES.eater, faceX: 1, faceY: 0, flutter: 0,
+  });
+  dropSpark(eat, 288, 200, false);
+  if (eat.sparks[0].wet || eat.sparks[0].dead) throw new Error('eat spark live dry');
+  const eatBooms = eat.stats.booms;
+  for (let i = 0; i < 12; i++) update(eat, 0.05);
+  if (!eat.sparks[0].dead) throw new Error('拾烬 eats dry spark');
+  if (eat.stats.booms !== eatBooms) throw new Error('eat must not boom');
+  if (String(eat.toast).indexOf(TOAST.eaterEat) < 0) throw new Error('拾烬吃辙');
+
+  const eatIdle = makeState();
+  resetRoom(eatIdle, 0, false);
+  eatIdle.player.x = 40;
+  eatIdle.player.y = 40;
+  eatIdle.player.inv = 2;
+  eatIdle.enemies.push({
+    x: 420, y: 220, r: EATER_R, hp: EATER_HP, hitT: 0,
+    kind: NAMES.eater, faceX: 1, faceY: 0, flutter: 0,
+  });
+  const ei = eatIdle.enemies[eatIdle.enemies.length - 1];
+  const idleEx = ei.x;
+  const idleEy = ei.y;
+  const idleP0 = dist(idleEx, idleEy, eatIdle.player.x, eatIdle.player.y);
+  for (let i = 0; i < 20; i++) update(eatIdle, 0.05);
+  const idleP1 = dist(ei.x, ei.y, eatIdle.player.x, eatIdle.player.y);
+  if (idleP0 - idleP1 > 18) throw new Error('拾烬 must not seek the player');
+
+  const eatWet = makeState();
+  resetRoom(eatWet, 0, false);
+  eatWet.player.x = 40;
+  eatWet.player.y = 40;
+  eatWet.player.inv = 2;
+  eatWet.waters = [{ x: 200, y: 180, w: 80, h: 80 }];
+  eatWet.enemies.push({
+    x: 240, y: 220, r: EATER_R, hp: EATER_HP, hitT: 0,
+    kind: NAMES.eater, faceX: 1, faceY: 0, flutter: 0,
+  });
+  dropSpark(eatWet, 240, 220, false);
+  if (!eatWet.sparks[0].wet) throw new Error('wet spark for 拾烬');
+  for (let i = 0; i < 16; i++) update(eatWet, 0.05);
+  if (eatWet.sparks[0].dead) throw new Error('拾烬 must not eat wet');
+  if (!eatWet.sparks[0].wet) throw new Error('wet stays wet');
+  for (let i = 0; i < 24; i++) update(eatWet, 0.1);
+  if (eatWet.stats.fizzles < 1) throw new Error('wet spark fizzle path');
+  if (eatWet.stats.booms !== 0) throw new Error('wet no boom');
+
+  const eatHp = makeState();
+  resetRoom(eatHp, 0, false);
+  eatHp.player.x = 40;
+  eatHp.player.y = 40;
+  eatHp.player.inv = 2;
+  eatHp.enemies.push({
+    x: 400, y: 220, r: EATER_R, hp: EATER_HP, hitT: 0,
+    kind: NAMES.eater, faceX: 1, faceY: 0, flutter: 0,
+  });
+  const eh = eatHp.enemies[eatHp.enemies.length - 1];
+  explode(eatHp, eh.x, eh.y, true);
+  if (eh.hp !== 1) throw new Error('拾烬 any blast is 1');
+  explode(eatHp, eh.x, eh.y, false);
+  if (eh.hp > 0) throw new Error('拾烬 dies in 2 blasts');
+  if (eatHp.toast !== TOAST.eater) throw new Error('拾烬倒了');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+
+  const shi = makeState();
+  resetRoom(shi, 17, false);
+  if (shi.roomName !== '拾廊' || shi.roomId !== 'shilang') throw new Error('shilang load');
+  if (shi.toast !== TOAST.eaterRoom) throw new Error('拾廊 intro');
+  if (shi.roomW !== 960 || shi.roomH !== 400) throw new Error('拾廊 size');
+  if (shi.player.x !== 80 || shi.player.y !== 200) throw new Error('拾廊 spawn');
+  let shiCore = 0;
+  let shiHeal = 0;
+  let shiThick = 0;
+  for (let i = 0; i < shi.crates.length; i++) {
+    if (shi.crates[i].loot === 'core') shiCore += 1;
+    if (shi.crates[i].loot === 'heal') shiHeal += 1;
+    if (shi.crates[i].thick) shiThick += 1;
+  }
+  if (shiCore !== 1) throw new Error('拾廊 心核');
+  if (shiHeal < 1) throw new Error('拾廊 回星');
+  const sBox = shi.crates.find(function (c) { return c.loot === 'core'; });
+  if (!sBox || sBox.thick) throw new Error('拾廊 心核 crate is not thick');
+  if (shiThick) throw new Error('拾廊 no thick crate');
+  let shiHound = 0;
+  let shiGuard = 0;
+  let shiMoth = 0;
+  let shiEater = 0;
+  for (let i = 0; i < shi.enemies.length; i++) {
+    if (isHound(shi.enemies[i])) shiHound += 1;
+    else if (isMoth(shi.enemies[i])) shiMoth += 1;
+    else if (isEater(shi.enemies[i])) shiEater += 1;
+    else shiGuard += 1;
+  }
+  if (shiEater !== 1 || shiGuard !== 1 || shiHound !== 0 || shiMoth !== 0) {
+    throw new Error('拾廊 拾烬/烬卫');
+  }
+  const se = shi.enemies.find(function (e) { return isEater(e); });
+  if (!se || se.hp !== 2 || se.r !== EATER_R) throw new Error('拾廊 拾烬 stats');
+  if (Math.abs(se.x - 400) > 1e-9 || Math.abs(se.y - 230) > 1e-9) throw new Error('拾廊 拾烬 pos');
+  let shiHasteItem = 0;
+  let shiSeedItem = 0;
+  for (let i = 0; i < shi.items.length; i++) {
+    if (shi.items[i].kind === 'haste') shiHasteItem += 1;
+    if (shi.items[i].kind === 'seed') shiSeedItem += 1;
+  }
+  if (shiHasteItem || shiSeedItem) throw new Error('拾廊 no 焰种/急燃');
+  let shiTide = 0;
+  let shiStill = 0;
+  for (let i = 0; i < shi.waters.length; i++) {
+    if (shi.waters[i].tide) shiTide += 1;
+    else shiStill += 1;
+  }
+  if (shiTide) throw new Error('拾廊 no tide');
+  if (shiStill < 1) throw new Error('拾廊 needs 水洼');
+  if (inWater(shi, 80, 200) || inOil(shi, 80, 200)) throw new Error('拾廊 spawn dry');
+  if (inWater(shi, 400, 100)) throw new Error('拾廊 north shelf wet');
+  if (!inWater(shi, 450, 350)) throw new Error('拾廊 wet bag');
+  for (let i = 0; i < shi.crates.length; i++) {
+    const c = shi.crates[i];
+    if (circleRect(shi.player.x, shi.player.y, shi.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('拾廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 500; x += 10) {
+    for (let i = 0; i < shi.crates.length; i++) {
+      const c = shi.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('拾廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 700; x += 20) {
+    for (let y = 80; y <= 120; y += 20) {
+      if (inWater(shi, x, y)) throw new Error('拾廊 north puddle');
+      for (let i = 0; i < shi.enemies.length; i++) {
+        const e = shi.enemies[i];
+        if (dist(e.x, e.y, x, y) < e.r + 8) throw new Error('拾廊 north enemy');
+      }
+    }
+  }
+  explode(shi, sBox.x + sBox.w * 0.5, sBox.y - 20, false);
+  if (!sBox.open) throw new Error('拾廊 dry trail should open 心核');
+  takeCore(shi, { x: 100, y: 100 });
+  if (!shi.won || shi.toast !== TOAST.all) throw new Error('拾廊 should 通关');
+  const hudShi = makeState();
+  resetRoom(hudShi, 17, false);
+  if (roomHudText(hudShi) !== '拾廊 · 18/18') throw new Error('HUD 拾廊 18/18');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
