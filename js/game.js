@@ -48,6 +48,10 @@ const RAIN_N = 3;
 const RAIN_H = 180;
 const RAIN_GAP = 30;
 const RAIN_DT = 0.14;
+const SPRING_N = 3;
+const SPRING_H = 180;
+const SPRING_GAP = 30;
+const SPRING_DT = 0.14;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -139,6 +143,7 @@ const NAMES = {
   drum: '鼓爆',
   pulse: '脉爆',
   rain: '雨爆',
+  spring: '泉爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -258,6 +263,9 @@ const TOAST = {
   rainGet: '捡到雨爆',
   rainUse: '雨下来了',
   rainRoom: '雨过去清场',
+  springGet: '捡到泉爆',
+  springUse: '泉喷出来了',
+  springRoom: '泉过去清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -296,6 +304,7 @@ const COL = {
   drum: '#ffd24a',
   pulse: '#c08cff',
   rain: '#5ee0ff',
+  spring: '#9dff6a',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -552,6 +561,7 @@ function lootKind(drop) {
   if (drop === '鼓爆' || drop === 'drum') return 'drum';
   if (drop === '脉爆' || drop === 'pulse') return 'pulse';
   if (drop === '雨爆' || drop === 'rain') return 'rain';
+  if (drop === '泉爆' || drop === 'spring') return 'spring';
   return null;
 }
 
@@ -625,6 +635,7 @@ function makeState() {
     drumReady: false,
     pulseReady: false,
     rainReady: false,
+    springReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -637,6 +648,7 @@ function makeState() {
     drums: [],
     pulses: [],
     rains: [],
+    springs: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -760,6 +772,7 @@ function resetRoom(s, index, keepHearts) {
   s.drumReady = false;
   s.pulseReady = false;
   s.rainReady = false;
+  s.springReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -794,6 +807,8 @@ function resetRoom(s, index, keepHearts) {
   s.pulses.length = 0;
   if (!s.rains) s.rains = [];
   s.rains.length = 0;
+  if (!s.springs) s.springs = [];
+  s.springs.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -914,6 +929,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '鼓廊') toast(s, TOAST.drumRoom, 1.4, COL.drum);
   else if (room.name === '脉廊') toast(s, TOAST.pulseRoom, 1.4, COL.pulse);
   else if (room.name === '雨廊') toast(s, TOAST.rainRoom, 1.4, COL.rain);
+  else if (room.name === '泉廊') toast(s, TOAST.springRoom, 1.4, COL.spring);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1592,6 +1608,32 @@ function updateRains(s, dt) {
   }
 }
 
+function updateSprings(s, dt) {
+  if (!s.springs || !s.springs.length) return;
+  const fires = [];
+  for (let i = s.springs.length - 1; i >= 0; i--) {
+    const p = s.springs[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.springs.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 6, p.y + 12 + Math.random() * 18, 1, COL.spring, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.spring, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -1774,6 +1816,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.rainReady) {
     s.rainReady = false;
     raining = true;
+  }
+  let springing = false;
+  if (!forked && s.springReady) {
+    s.springReady = false;
+    springing = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2322,6 +2369,19 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 160);
     }
   }
+  if (springing) {
+    if (!s.springs) s.springs = [];
+    for (let k = 0; k < SPRING_N; k++) {
+      s.springs.push({ x: x, y: y + SPRING_H - SPRING_GAP * k, t: SPRING_DT * (k + 1) });
+    }
+    toast(s, TOAST.springUse, 1.1, COL.spring);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.spring, 170);
+      burst(s, x, y, 4, COL.gold, 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2595,6 +2655,7 @@ function watchSteer(s, dt) {
   let drumIt = null;
   let pulseIt = null;
   let rainIt = null;
+  let springIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2622,8 +2683,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'drum') drumIt = it;
     if (it.kind === 'pulse') pulseIt = it;
     if (it.kind === 'rain') rainIt = it;
+    if (it.kind === 'spring') springIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt);
 
   let guard = null;
   let gd = 1e9;
@@ -2753,6 +2815,10 @@ function watchSteer(s, dt) {
   } else if (!s.rainReady && rainIt) {
     tx = rainIt.x - p.x;
     ty = rainIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.springReady && springIt) {
+    tx = springIt.x - p.x;
+    ty = springIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -2934,6 +3000,7 @@ function update(s, dt) {
     updateDrums(s, dt);
     updatePulses(s, dt);
     updateRains(s, dt);
+    updateSprings(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -2956,6 +3023,7 @@ function update(s, dt) {
     updateDrums(s, dt);
     updatePulses(s, dt);
     updateRains(s, dt);
+    updateSprings(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3070,6 +3138,7 @@ function update(s, dt) {
   updateDrums(s, dt);
   updatePulses(s, dt);
   updateRains(s, dt);
+  updateSprings(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3270,6 +3339,13 @@ function update(s, dt) {
       toast(s, TOAST.rainGet, 1.1, COL.rain);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.rain, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'spring') {
+      s.springReady = true;
+      toast(s, TOAST.springGet, 1.1, COL.spring);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.spring, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -3967,6 +4043,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.rain, it.x, it.y - 16);
+    } else if (it.kind === 'spring') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.spring, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.spring;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.spring;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.spring, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -4403,6 +4494,35 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('雨', p.x, p.y - 12);
+    }
+  }
+
+  if (s.springs && s.springs.length) {
+    for (let i = 0; i < s.springs.length; i++) {
+      const p = s.springs[i];
+      const maxT = SPRING_DT * SPRING_N;
+      const u = Math.max(0, p.t) / maxT;
+      const y1 = p.y + 36;
+      if (!reducedMotion()) glow(ctx, p.x, (y1 + p.y) * 0.5, 18, COL.spring, 0.28);
+      ctx.strokeStyle = COL.spring;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(p.x, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.spring;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.spring;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('泉', p.x, p.y - 12);
     }
   }
 
@@ -5181,6 +5301,27 @@ function draw(s, ctx) {
     ctx.arc(rx, ry, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.springReady) {
+    let gx;
+    let gy;
+    if (reducedMotion()) {
+      gx = p.x + 4;
+      gy = p.y + 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15;
+      gx = p.x + Math.cos(a) * 16;
+      gy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, gx, gy, 8, COL.spring, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.spring;
+    ctx.arc(gx, gy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(gx, gy, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -5549,6 +5690,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (fanEl && s.rainReady && !s.fanReady) {
     fanEl.textContent = NAMES.rain;
   }
+  const springEl = (typeof document !== 'undefined') ? document.getElementById('spring') : null;
+  if (springEl) {
+    springEl.textContent = s.springReady ? NAMES.spring : '';
+  } else if (rainEl && s.springReady && !s.rainReady) {
+    rainEl.textContent = NAMES.spring;
+  } else if (pulseEl && s.springReady && !s.pulseReady) {
+    pulseEl.textContent = NAMES.spring;
+  } else if (drumEl && s.springReady && !s.drumReady) {
+    drumEl.textContent = NAMES.spring;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -5679,10 +5830,14 @@ function selfCheck() {
   if (RAIN_H !== 180) throw new Error('RAIN_H 180');
   if (RAIN_GAP !== 30) throw new Error('RAIN_GAP 30');
   if (RAIN_DT !== 0.14) throw new Error('RAIN_DT 0.14');
+  if (SPRING_N !== 3) throw new Error('SPRING_N 3');
+  if (SPRING_H !== 180) throw new Error('SPRING_H 180');
+  if (SPRING_GAP !== 30) throw new Error('SPRING_GAP 30');
+  if (SPRING_DT !== 0.14) throw new Error('SPRING_DT 0.14');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 41) throw new Error('need 41 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊'];
+  if (!ROOMS || ROOMS.length !== 42) throw new Error('need 42 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -5754,6 +5909,8 @@ function selfCheck() {
   if (ROOMS[39].name !== '脉廊') throw new Error('room 40 脉廊');
   if (ROOMS[40].id !== 'yulang') throw new Error('雨廊 id');
   if (ROOMS[40].name !== '雨廊') throw new Error('room 41 雨廊');
+  if (ROOMS[41].id !== 'quanlang') throw new Error('泉廊 id');
+  if (ROOMS[41].name !== '泉廊') throw new Error('room 42 泉廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -5782,6 +5939,9 @@ function selfCheck() {
   if (NAMES.rain !== '雨爆') throw new Error('NAMES.rain');
   if (COL.rain !== '#5ee0ff') throw new Error('COL.rain');
   if (lootKind('雨爆') !== 'rain' || lootKind('rain') !== 'rain') throw new Error('lootKind 雨爆');
+  if (NAMES.spring !== '泉爆') throw new Error('NAMES.spring');
+  if (COL.spring !== '#9dff6a') throw new Error('COL.spring');
+  if (lootKind('泉爆') !== 'spring' || lootKind('spring') !== 'spring') throw new Error('lootKind 泉爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -5804,7 +5964,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -12784,6 +12944,7 @@ function selfCheck() {
   bothP.drumReady = true;
   bothP.pulseReady = true;
   bothP.rainReady = true;
+  bothP.springReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -12792,10 +12953,12 @@ function selfCheck() {
   if (bothP.drumReady) throw new Error('same boom spends 鼓爆');
   if (bothP.pulseReady) throw new Error('same boom spends 脉爆');
   if (bothP.rainReady) throw new Error('same boom spends 雨爆');
+  if (bothP.springReady) throw new Error('same boom spends 泉爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
   if (!bothP.rains || bothP.rains.length !== RAIN_N) throw new Error('same boom rains');
+  if (!bothP.springs || bothP.springs.length !== SPRING_N) throw new Error('same boom springs');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -13127,7 +13290,10 @@ function selfCheck() {
   explode(yu, yuBox.x + yuBox.w * 0.5, yuBox.y - 20, false);
   if (!yuBox.open) throw new Error('雨廊 dry trail should open 心核');
   takeCore(yu, { x: 100, y: 100 });
-  if (!yu.won || yu.toast !== TOAST.all) throw new Error('雨廊 should 通关');
+  if (yu.won) throw new Error('雨廊 should not 通关');
+  if (yu.toast !== TOAST.core) throw new Error('雨廊 过关');
+  for (let i = 0; i < 20; i++) update(yu, 0.1);
+  if (yu.roomName !== '泉廊') throw new Error('core advances to 泉廊');
   const hudYu = makeState();
   resetRoom(hudYu, 40, false);
   if (roomHudText(hudYu).indexOf('雨廊 · 41/') !== 0) throw new Error('HUD 雨廊 41/n');
@@ -13142,6 +13308,272 @@ function selfCheck() {
   if (TOAST.rainGet !== '捡到雨爆') throw new Error('捡到雨爆');
   if (TOAST.rainUse !== '雨下来了') throw new Error('雨下来了 toast');
   if (TOAST.rainRoom !== '雨过去清场') throw new Error('雨过去清场');
+
+  const quan = makeState();
+  resetRoom(quan, 41, false);
+  if (quan.roomName !== '泉廊' || quan.roomId !== 'quanlang') throw new Error('quanlang load');
+  if (quan.toast !== TOAST.springRoom) throw new Error('泉廊 intro');
+  if (quan.roomW !== 960 || quan.roomH !== 400) throw new Error('泉廊 size');
+  if (quan.player.x !== 80 || quan.player.y !== 100) throw new Error('泉廊 spawn');
+  if (quan.springReady) throw new Error('泉廊 spring starts false');
+  if (!quan.springs || quan.springs.length) throw new Error('泉廊 springs start empty');
+  let quanStill = 0;
+  let quanTide = 0;
+  for (let i = 0; i < quan.waters.length; i++) {
+    if (quan.waters[i].tide) quanTide += 1;
+    else quanStill += 1;
+  }
+  if (quanStill < 1) throw new Error('泉廊 needs static 水洼');
+  if (quanTide) throw new Error('泉廊 no tide');
+  let quanCore = 0;
+  let quanHeal = 0;
+  let quanThick = 0;
+  let quanSpringItem = 0;
+  let quanRainItem = 0;
+  let quanPulseItem = 0;
+  let quanDrumItem = 0;
+  for (let i = 0; i < quan.crates.length; i++) {
+    if (quan.crates[i].loot === 'core') quanCore += 1;
+    if (quan.crates[i].loot === 'heal') quanHeal += 1;
+    if (quan.crates[i].thick) quanThick += 1;
+  }
+  for (let i = 0; i < quan.items.length; i++) {
+    if (quan.items[i].kind === 'spring') quanSpringItem += 1;
+    if (quan.items[i].kind === 'rain') quanRainItem += 1;
+    if (quan.items[i].kind === 'pulse') quanPulseItem += 1;
+    if (quan.items[i].kind === 'drum') quanDrumItem += 1;
+  }
+  if (quanSpringItem < 1) throw new Error('泉廊 needs 泉爆');
+  if (quanRainItem || quanPulseItem || quanDrumItem) throw new Error('泉廊 no extra pickup');
+  if (quanCore !== 1) throw new Error('泉廊 心核');
+  if (quanHeal < 1) throw new Error('泉廊 回星');
+  const quanBox = quan.crates.find(function (c) { return c.loot === 'core'; });
+  if (!quanBox || quanBox.thick) throw new Error('泉廊 心核 crate is not thick');
+  if (quanThick) throw new Error('泉廊 no thick crate');
+  let quanHound = 0;
+  let quanGuard = 0;
+  let quanMoth = 0;
+  let quanEater = 0;
+  let quanShell = 0;
+  let quanBoomer = 0;
+  for (let i = 0; i < quan.enemies.length; i++) {
+    if (isHound(quan.enemies[i])) quanHound += 1;
+    else if (isMoth(quan.enemies[i])) quanMoth += 1;
+    else if (isEater(quan.enemies[i])) quanEater += 1;
+    else if (isShell(quan.enemies[i])) quanShell += 1;
+    else if (isBoomer(quan.enemies[i])) quanBoomer += 1;
+    else quanGuard += 1;
+  }
+  if (quanGuard !== 3 || quanHound !== 0 || quanMoth !== 0 || quanEater !== 0 || quanShell !== 0 || quanBoomer !== 0) {
+    throw new Error('泉廊 烬卫 only');
+  }
+  if (inWater(quan, 80, 100) || inOil(quan, 80, 100)) throw new Error('泉廊 spawn dry');
+  if (inWater(quan, 240, 100) || inOil(quan, 240, 100)) throw new Error('泉廊 泉爆 dry');
+  if (inWater(quan, 400, 100) || inOil(quan, 400, 100)) throw new Error('泉廊 plant dry');
+  if (inOil(quan, 860, 88) || inWater(quan, 860, 88)) throw new Error('泉廊 core dry');
+  if (inWater(quan, 400, 220) || inOil(quan, 400, 220)) throw new Error('泉廊 烬卫 dry high');
+  if (inWater(quan, 400, 250) || inOil(quan, 400, 250)) throw new Error('泉廊 烬卫 dry mid');
+  if (inWater(quan, 400, 280) || inOil(quan, 400, 280)) throw new Error('泉廊 烬卫 dry floor');
+  if (!inWater(quan, 750, 365)) throw new Error('泉廊 wet bag');
+  if (inWater(quan, 400, 50)) throw new Error('泉廊 north shelf wet');
+  for (let i = 0; i < quan.crates.length; i++) {
+    const c = quan.crates[i];
+    if (circleRect(quan.player.x, quan.player.y, quan.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('泉廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 450; x += 10) {
+    for (let i = 0; i < quan.crates.length; i++) {
+      const c = quan.crates[i];
+      if (circleRect(x, 100, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('泉廊 crate on dry walk');
+      }
+    }
+  }
+  const quanHigh = quan.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 220) < 1; });
+  const quanMid = quan.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 250) < 1; });
+  const quanFloor = quan.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 280) < 1; });
+  if (!quanHigh || !quanMid || !quanFloor) throw new Error('泉廊 three 烬卫 seats');
+  const quanSeats = [quanHigh, quanMid, quanFloor];
+  for (let i = 0; i < quanSeats.length; i++) {
+    const e = quanSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 100);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('泉廊 primary misses 烬卫');
+  }
+  for (let i = 0; i < quanSeats.length; i++) {
+    for (let k = 0; k < SPRING_N; k++) {
+      const jetY = 100 + SPRING_H - SPRING_GAP * k;
+      if (dist(quanSeats[i].x, quanSeats[i].y, 400, jetY) > HOT_BLAST_R + (quanSeats[i].r || ENEMY_R)) {
+        throw new Error('泉廊 hot spring reaches 烬卫');
+      }
+    }
+  }
+  const quanCoreCx = quanBox.x + quanBox.w * 0.5;
+  const quanCoreCy = quanBox.y + quanBox.h * 0.5;
+  if (!(dist(quanCoreCx, quanCoreCy, 400, 100) > HOT_BLAST_R)) throw new Error('泉廊 core outside plant blast');
+  quan.player.x = 80;
+  quan.player.y = 80;
+  quan.player.hearts = 3;
+  quan.player.inv = 2;
+  quan.hitstop = 0;
+  quan.embers.length = 0;
+  const quanGround = quan.items.find(function (it) { return it.kind === 'spring' && !it.taken; });
+  if (!quanGround) throw new Error('泉廊 ground 泉爆 present');
+  quan.player.x = quanGround.x;
+  quan.player.y = 100;
+  update(quan, 0.016);
+  if (quan.springReady !== true) throw new Error('pick spring → springReady');
+  if (quan.toast !== TOAST.springGet) throw new Error('捡到泉爆 room');
+  quan.player.x = 80;
+  quan.player.y = 80;
+  quan.player.inv = 2;
+  quan.hitstop = 0;
+  quan.embers.length = 0;
+  const quanHpHigh = quanHigh.hp;
+  const quanHpMid = quanMid.hp;
+  const quanHpFloor = quanFloor.hp;
+  explode(quan, 400, 100, false);
+  if (quan.springReady) throw new Error('泉廊 spring spends');
+  if (quan.toast !== TOAST.springUse) throw new Error('泉喷出来了 room');
+  if (!quan.springs || quan.springs.length !== SPRING_N) throw new Error('泉廊 springs queued');
+  if (Math.abs(quan.springs[0].x - 400) > 1e-6 || Math.abs(quan.springs[0].y - 280) > 1e-6) throw new Error('泉廊 jet floor');
+  if (Math.abs(quan.springs[1].x - 400) > 1e-6 || Math.abs(quan.springs[1].y - 250) > 1e-6) throw new Error('泉廊 jet mid');
+  if (Math.abs(quan.springs[2].x - 400) > 1e-6 || Math.abs(quan.springs[2].y - 220) > 1e-6) throw new Error('泉廊 jet high');
+  if (Math.abs(quan.springs[0].t - SPRING_DT) > 1e-6) throw new Error('泉廊 dt 1');
+  if (Math.abs(quan.springs[1].t - SPRING_DT * 2) > 1e-6) throw new Error('泉廊 dt 2');
+  if (Math.abs(quan.springs[2].t - SPRING_DT * 3) > 1e-6) throw new Error('泉廊 dt 3');
+  if (quanHigh.hp !== quanHpHigh || quanMid.hp !== quanHpMid || quanFloor.hp !== quanHpFloor) throw new Error('泉廊 primary misses');
+  quan.hitstop = 0;
+  updateSprings(quan, SPRING_DT + 0.01);
+  if (quan.springs.length !== 2) throw new Error('泉廊 first jet');
+  if (!(quanHigh.hp === quanHpHigh - 2 || quanHigh.hp <= 0)) throw new Error('泉廊 spring dmg high');
+  if (!(quanMid.hp === quanHpMid - 2 || quanMid.hp <= 0)) throw new Error('泉廊 spring dmg mid');
+  if (!(quanFloor.hp === quanHpFloor - 2 || quanFloor.hp <= 0)) throw new Error('泉廊 spring dmg floor');
+  quanHigh.x = 400;
+  quanHigh.y = 220;
+  quanMid.x = 400;
+  quanMid.y = 250;
+  quanFloor.x = 400;
+  quanFloor.y = 280;
+  quan.hitstop = 0;
+  updateSprings(quan, SPRING_DT + 0.01);
+  if (quan.springs.length !== 1) throw new Error('泉廊 second jet');
+  quanHigh.x = 400;
+  quanHigh.y = 220;
+  quanMid.x = 400;
+  quanMid.y = 250;
+  quanFloor.x = 400;
+  quanFloor.y = 280;
+  quan.hitstop = 0;
+  updateSprings(quan, SPRING_DT + 0.01);
+  if (quan.springs.length !== 0) throw new Error('泉廊 springs finish');
+  if (quanHigh.hp > 0 || quanMid.hp > 0 || quanFloor.hp > 0) throw new Error('泉廊 three springs kill');
+  quan.springReady = true;
+  dropSpark(quan, 300, 80, false);
+  if (quan.springReady !== true) throw new Error('dropSpark keeps 泉爆');
+  quan.input.dash = true;
+  quan.player.dashT = 0;
+  quan.player.dashCd = 0;
+  quan.hitstop = 0;
+  update(quan, 0.016);
+  if (quan.springReady !== true) throw new Error('dash does not consume 泉爆');
+  const springSelf = makeState();
+  resetRoom(springSelf, 0, false);
+  springSelf.springReady = true;
+  springSelf.player.x = 400;
+  springSelf.player.y = 280;
+  springSelf.player.inv = 0;
+  springSelf.player.hearts = 3;
+  explode(springSelf, 400, 100, false);
+  if (springSelf.player.hearts !== 3) throw new Error('primary dry misses player for spring');
+  springSelf.hitstop = 0;
+  updateSprings(springSelf, SPRING_DT + 0.01);
+  if (springSelf.player.hearts !== 2) throw new Error('own spring hurts player');
+  springSelf.player.hearts = 3;
+  springSelf.player.inv = 0;
+  springSelf.player.dashT = DASH_TIME;
+  springSelf.springs = [{ x: 400, y: 280, t: 0 }];
+  springSelf.hitstop = 0;
+  updateSprings(springSelf, 0.02);
+  if (springSelf.player.hearts !== 3) throw new Error('dash i-frames skip spring');
+  quan.springReady = true;
+  quan.sparks.length = 0;
+  if (quan.springs) quan.springs.length = 0;
+  quan.player.x = 80;
+  quan.player.y = 80;
+  quan.player.dashT = 0;
+  quan.player.dashCd = 0;
+  quan.player.vx = 0;
+  quan.player.vy = 0;
+  quan.player.inv = 2;
+  quan.input.x = 0;
+  quan.input.y = 0;
+  quan.input.dash = false;
+  quan.hitstop = 0;
+  quan.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(quan, 120, 120, false);
+  if (!quan.sparks[quan.sparks.length - 1].wet) throw new Error('泉廊 wet spark');
+  const quanBooms = quan.stats.booms;
+  for (let i = 0; i < 24; i++) update(quan, 0.1);
+  if (quan.springReady !== true) throw new Error('泉廊 wet fizzle does not consume');
+  if (quan.stats.booms !== quanBooms) throw new Error('泉廊 wet no extra boom');
+  quan.waters = [];
+  explode(quan, 200, 200, false, false, false, { fork: true });
+  if (quan.springReady !== true) throw new Error('泉廊 fork does not consume');
+  quan.echoReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  for (let i = 0; i < 12; i++) update(quan, 0.05);
+  if (quan.springReady !== true) throw new Error('泉廊 echo does not consume');
+  quan.fanReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  quan.hitstop = 0;
+  updateFans(quan, FAN_DT * FAN_N + 0.05);
+  if (quan.springReady !== true) throw new Error('泉廊 fan-fork does not consume');
+  quan.drumReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  quan.hitstop = 0;
+  updateDrums(quan, 0.55);
+  if (quan.springReady !== true) throw new Error('泉廊 drum-wave does not consume');
+  quan.pulseReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  quan.hitstop = 0;
+  updatePulses(quan, PULSE_DT * PULSE_N + 0.05);
+  if (quan.springReady !== true) throw new Error('泉廊 pulse-aftershock does not consume');
+  quan.rainReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  quan.hitstop = 0;
+  updateRains(quan, RAIN_DT * RAIN_N + 0.05);
+  if (quan.springReady !== true) throw new Error('泉廊 rain-drop does not consume');
+  quan.spinReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  quan.hitstop = 0;
+  updateSpins(quan, SPIN_DT * SPIN_N + 0.05);
+  if (quan.springReady !== true) throw new Error('泉廊 spin-orbit does not consume');
+  quan.waters = [];
+  explode(quan, quanBox.x + quanBox.w * 0.5, quanBox.y - 20, false);
+  if (!quanBox.open) throw new Error('泉廊 dry trail should open 心核');
+  takeCore(quan, { x: 100, y: 100 });
+  if (!quan.won || quan.toast !== TOAST.all) throw new Error('泉廊 should 通关');
+  const hudQuan = makeState();
+  resetRoom(hudQuan, 41, false);
+  if (roomHudText(hudQuan).indexOf('泉廊 · 42/') !== 0) throw new Error('HUD 泉廊 42/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (SPRING_N !== 3) throw new Error('SPRING_N 3');
+  if (SPRING_H !== 180) throw new Error('SPRING_H 180');
+  if (SPRING_GAP !== 30) throw new Error('SPRING_GAP 30');
+  if (SPRING_DT !== 0.14) throw new Error('SPRING_DT 0.14');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.springGet !== '捡到泉爆') throw new Error('捡到泉爆');
+  if (TOAST.springUse !== '泉喷出来了') throw new Error('泉喷出来了 toast');
+  if (TOAST.springRoom !== '泉过去清场') throw new Error('泉过去清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
