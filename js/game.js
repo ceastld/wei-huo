@@ -12,6 +12,10 @@ const RING_OUT = 80;
 const FROST_T = 1.8;
 const SHOVE_V = 280;
 const SHOVE_T = 0.40;
+const BAIT_T = 2.0;
+const BAIT_SEE = 240;
+const BAIT_R = 11;
+const BAIT_HIT = 16;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -84,6 +88,7 @@ const NAMES = {
   halo: '环爆',
   frost: '霜爆',
   shove: '推爆',
+  bait: '诱爆',
   eater: '拾烬',
 };
 
@@ -155,6 +160,9 @@ const TOAST = {
   shoveGet: '捡到推爆',
   shoveUse: '推开了',
   shoveRoom: '推爆会推开',
+  baitGet: '捡到诱爆',
+  baitUse: '诱出来了',
+  baitRoom: '诱爆会引开',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -173,6 +181,7 @@ const COL = {
   halo: '#9a7aff',
   frost: '#9ef0ff',
   shove: '#ff5a3a',
+  bait: '#ffb020',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -398,6 +407,7 @@ function lootKind(drop) {
   if (drop === '环爆' || drop === 'halo') return 'halo';
   if (drop === '霜爆' || drop === 'frost') return 'frost';
   if (drop === '推爆' || drop === 'shove') return 'shove';
+  if (drop === '诱爆' || drop === 'bait') return 'bait';
   return null;
 }
 
@@ -458,6 +468,8 @@ function makeState() {
     haloReady: false,
     frostReady: false,
     shoveReady: false,
+    baitReady: false,
+    baits: [],
     echoes: [],
     echoing: false,
     splits: [],
@@ -515,6 +527,7 @@ function resetRoom(s, index, keepHearts) {
   s.haloReady = false;
   s.frostReady = false;
   s.shoveReady = false;
+  s.baitReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -525,6 +538,8 @@ function resetRoom(s, index, keepHearts) {
   s.pierces.length = 0;
   if (!s.halos) s.halos = [];
   s.halos.length = 0;
+  if (!s.baits) s.baits = [];
+  s.baits.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -623,6 +638,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '晕廊') toast(s, TOAST.haloRoom, 1.4, COL.halo);
   else if (room.name === '冻廊') toast(s, TOAST.frostRoom, 1.4, COL.frost);
   else if (room.name === '推廊') toast(s, TOAST.shoveRoom, 1.4, COL.shove);
+  else if (room.name === '诱廊') toast(s, TOAST.baitRoom, 1.4, COL.bait);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -997,10 +1013,58 @@ function updateEmbers(s, dt, canHurt) {
   }
 }
 
+function nearestBait(s, x, y) {
+  const baits = s.baits || [];
+  let best = null;
+  let bd = 1e9;
+  for (let i = 0; i < baits.length; i++) {
+    const b = baits[i];
+    const d = dist(x, y, b.x, b.y);
+    if (d <= BAIT_SEE && d < bd) {
+      bd = d;
+      best = b;
+    }
+  }
+  return best;
+}
+
+function updateBaits(s, dt) {
+  if (!s.baits || !s.baits.length) return;
+  for (let i = s.baits.length - 1; i >= 0; i--) {
+    const b = s.baits[i];
+    b.t -= dt;
+    if (inWater(s, b.x, b.y)) {
+      s.baits.splice(i, 1);
+      burst(s, b.x, b.y, 4, COL.water, 70);
+      continue;
+    }
+    let touched = false;
+    for (let j = 0; j < s.enemies.length; j++) {
+      const e = s.enemies[j];
+      if (e.hp <= 0) continue;
+      if (isHound(e) || isMoth(e) || isEater(e)) continue;
+      if (dist(e.x, e.y, b.x, b.y) <= BAIT_HIT + e.r) {
+        touched = true;
+        break;
+      }
+    }
+    if (touched) {
+      s.baits.splice(i, 1);
+      if (!reducedMotion()) burst(s, b.x, b.y, 4, COL.bait, 160);
+      explode(s, b.x, b.y, false, false, false, { fork: true });
+      continue;
+    }
+    if (b.t <= 0) {
+      s.baits.splice(i, 1);
+      explode(s, b.x, b.y, false, false, false, { fork: true });
+    }
+  }
+}
+
 function explode(s, x, y, hot, fused, haste, opts) {
   const echoing = opts === true || (opts && opts.echo) || !!s.echoing;
   const splitting = !!(opts && opts.split) || !!s.splitting;
-  const forked = echoing || splitting;
+  const forked = echoing || splitting || !!(opts && opts.fork);
   let seeded = false;
   if (!forked && s.seed) {
     seeded = true;
@@ -1022,6 +1086,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.shoveReady) {
     s.shoveReady = false;
     shove = true;
+  }
+  let baited = false;
+  if (!forked && s.baitReady) {
+    s.baitReady = false;
+    baited = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -1306,6 +1375,17 @@ function explode(s, x, y, hot, fused, haste, opts) {
       s.hitstop = Math.max(s.hitstop, 0.06);
     }
   }
+  if (baited) {
+    if (!s.baits) s.baits = [];
+    s.baits.push({ x: x, y: y, t: BAIT_T });
+    toast(s, TOAST.baitUse, 1.1, COL.bait);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 8, COL.bait, 190);
+      burst(s, x, y, 4, COL.gold, 170);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -1555,6 +1635,7 @@ function watchSteer(s, dt) {
   let haloIt = null;
   let frostIt = null;
   let shoveIt = null;
+  let baitIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -1569,8 +1650,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'halo') haloIt = it;
     if (it.kind === 'frost') frostIt = it;
     if (it.kind === 'shove') shoveIt = it;
+    if (it.kind === 'bait') baitIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt);
 
   let guard = null;
   let gd = 1e9;
@@ -1648,6 +1730,10 @@ function watchSteer(s, dt) {
   } else if (!s.shoveReady && shoveIt) {
     tx = shoveIt.x - p.x;
     ty = shoveIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.baitReady && baitIt) {
+    tx = baitIt.x - p.x;
+    ty = baitIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && gd < 150) {
     const orbit = circleAim(p.x, p.y, guard.x, guard.y, 128, side);
@@ -1811,6 +1897,7 @@ function update(s, dt) {
     updateEchoes(s, dt);
     updateSplits(s, dt);
     updateEmbers(s, dt, false);
+    updateBaits(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
   }
@@ -1820,6 +1907,7 @@ function update(s, dt) {
     updateEchoes(s, dt);
     updateSplits(s, dt);
     updateEmbers(s, dt, false);
+    updateBaits(s, dt);
     return;
   }
 
@@ -1921,6 +2009,7 @@ function update(s, dt) {
   updateEchoes(s, dt);
   updateSplits(s, dt);
   updateEmbers(s, dt, true);
+  updateBaits(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
@@ -1939,9 +2028,12 @@ function update(s, dt) {
       else if (isMoth(e)) updateMoth(s, e, dt);
       else if (isEater(e)) updateEater(s, e, dt);
       else {
-        const d = dist(e.x, e.y, p.x, p.y) || 1;
-        e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
-        e.y += ((p.y - e.y) / d) * ENEMY_SPEED * dt;
+        const bait = nearestBait(s, e.x, e.y);
+        const tx = bait ? bait.x : p.x;
+        const ty = bait ? bait.y : p.y;
+        const d = dist(e.x, e.y, tx, ty) || 1;
+        e.x += ((tx - e.x) / d) * ENEMY_SPEED * dt;
+        e.y += ((ty - e.y) / d) * ENEMY_SPEED * dt;
       }
     } else if (!reducedMotion() && Math.random() < dt * 6) {
       burst(s, e.x + (Math.random() - 0.5) * 10, e.y - 6 - Math.random() * 8, 1, COL.frost, 40);
@@ -2027,6 +2119,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.gold, 130);
       burst(s, it.x, it.y, 4, COL.shove, 110);
+      punch(s, 3);
+    } else if (it.kind === 'bait') {
+      s.baitReady = true;
+      toast(s, TOAST.baitGet, 1.1, COL.bait);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.gold, 130);
+      burst(s, it.x, it.y, 4, COL.bait, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -2509,6 +2608,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.shove, it.x, it.y - 16);
+    } else if (it.kind === 'bait') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.bait, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.bait;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.bait;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.bait, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -2520,6 +2634,32 @@ function draw(s, ctx) {
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.heal, it.x, it.y - 14);
     }
+  }
+
+  for (let i = 0; i < (s.baits || []).length; i++) {
+    const b = s.baits[i];
+    const life = clamp(b.t / BAIT_T, 0, 1);
+    const pulse = reducedMotion() ? 1 : 0.88 + 0.18 * (0.5 + 0.5 * Math.sin((s.time || 0) * 8));
+    glow(ctx, b.x, b.y, (BAIT_R + 10) * pulse, COL.bait, reducedMotion() ? 0.28 : 0.22 + 0.28 * life);
+    ctx.globalAlpha = reducedMotion() ? 0.7 : 0.4 + 0.4 * life;
+    ctx.strokeStyle = COL.bait;
+    ctx.lineWidth = 2 / fit.scale;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, BAIT_R * pulse * (0.7 + 0.35 * life), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = COL.bait;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, BAIT_R * (reducedMotion() ? 0.72 : 0.62 * pulse), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COL.gold;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COL.bait;
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('诱', b.x, b.y - BAIT_R - 6);
   }
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -2912,6 +3052,27 @@ function draw(s, ctx) {
     ctx.arc(ux, uy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.baitReady) {
+    let bx;
+    let by;
+    if (reducedMotion()) {
+      bx = p.x - 10;
+      by = p.y + 12;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1;
+      bx = p.x + Math.cos(a) * 16;
+      by = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, bx, by, 8, COL.bait, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.bait;
+    ctx.arc(bx, by, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(bx, by, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -3146,6 +3307,12 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (frostEl && s.shoveReady && !s.frostReady) {
     frostEl.textContent = NAMES.shove;
   }
+  const baitEl = (typeof document !== 'undefined') ? document.getElementById('bait') : null;
+  if (baitEl) {
+    baitEl.textContent = s.baitReady ? NAMES.bait : '';
+  } else if (shoveEl && s.baitReady && !s.shoveReady) {
+    shoveEl.textContent = NAMES.bait;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -3237,10 +3404,14 @@ function selfCheck() {
   if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
   if (SHOVE_V !== 280) throw new Error('SHOVE_V 280');
   if (SHOVE_T !== 0.40) throw new Error('SHOVE_T 0.40');
+  if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
+  if (BAIT_SEE !== 240) throw new Error('BAIT_SEE 240');
+  if (BAIT_R !== 11) throw new Error('BAIT_R 11');
+  if (BAIT_HIT !== 16) throw new Error('BAIT_HIT 16');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 26) throw new Error('need 26 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊'];
+  if (!ROOMS || ROOMS.length !== 27) throw new Error('need 27 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -3282,6 +3453,8 @@ function selfCheck() {
   if (ROOMS[24].name !== '冻廊') throw new Error('room 25 冻廊');
   if (ROOMS[25].id !== 'tuilang') throw new Error('推廊 id');
   if (ROOMS[25].name !== '推廊') throw new Error('room 26 推廊');
+  if (ROOMS[26].id !== 'yinlang') throw new Error('诱廊 id');
+  if (ROOMS[26].name !== '诱廊') throw new Error('room 27 诱廊');
   if (SEED_R !== 72) throw new Error('SEED_R 72');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
@@ -3295,7 +3468,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -3442,10 +3615,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/26') throw new Error('HUD 空场 1/26');
+  if (roomHudText(hud0) !== '空场 · 1/27') throw new Error('HUD 空场 1/27');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/26') throw new Error('HUD 3/26');
+  if (roomHudText(hud2) !== '水巷 · 3/27') throw new Error('HUD 3/27');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -3657,7 +3830,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/26') throw new Error('HUD 灰径 11/26');
+  if (roomHudText(hudAsh) !== '灰径 · 11/27') throw new Error('HUD 灰径 11/27');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -3684,7 +3857,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/26') throw new Error('HUD 环行 12/26');
+  if (roomHudText(hudRing) !== '环行 · 12/27') throw new Error('HUD 环行 12/27');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -3713,7 +3886,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/26') throw new Error('HUD 密线 13/26');
+  if (roomHudText(hudWire) !== '密线 · 13/27') throw new Error('HUD 密线 13/27');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -4029,7 +4202,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/26') throw new Error('HUD 潮廊 14/26');
+  if (roomHudText(hudChao) !== '潮廊 · 14/27') throw new Error('HUD 潮廊 14/27');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -4096,7 +4269,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/26') throw new Error('HUD 种廊 15/26');
+  if (roomHudText(hudZhong) !== '种廊 · 15/27') throw new Error('HUD 种廊 15/27');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -4223,7 +4396,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/26') throw new Error('HUD 油廊 16/26');
+  if (roomHudText(hudYou) !== '油廊 · 16/27') throw new Error('HUD 油廊 16/27');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -4301,7 +4474,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/26') throw new Error('HUD 急廊 17/26');
+  if (roomHudText(hudJi) !== '急廊 · 17/27') throw new Error('HUD 急廊 17/27');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -4624,7 +4797,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/26') throw new Error('HUD 拾廊 18/26');
+  if (roomHudText(hudShi) !== '拾廊 · 18/27') throw new Error('HUD 拾廊 18/27');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -4686,6 +4859,16 @@ function selfCheck() {
   if (TOAST.shoveUse !== '推开了') throw new Error('推开了');
   if (TOAST.shoveRoom !== '推爆会推开') throw new Error('推爆会推开');
   if (lootKind('推爆') !== 'shove' || lootKind('shove') !== 'shove') throw new Error('lootKind 推爆');
+  if (NAMES.bait !== '诱爆') throw new Error('诱爆 name');
+  if (COL.bait !== '#ffb020') throw new Error('COL.bait');
+  if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
+  if (BAIT_SEE !== 240) throw new Error('BAIT_SEE 240');
+  if (BAIT_R !== 11) throw new Error('BAIT_R 11');
+  if (BAIT_HIT !== 16) throw new Error('BAIT_HIT 16');
+  if (TOAST.baitGet !== '捡到诱爆') throw new Error('捡到诱爆');
+  if (TOAST.baitUse !== '诱出来了') throw new Error('诱出来了');
+  if (TOAST.baitRoom !== '诱爆会引开') throw new Error('诱爆会引开');
+  if (lootKind('诱爆') !== 'bait' || lootKind('bait') !== 'bait') throw new Error('lootKind 诱爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -4864,7 +5047,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/26') throw new Error('HUD 响廊 19/26');
+  if (roomHudText(hudXiang) !== '响廊 · 19/27') throw new Error('HUD 响廊 19/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -5056,7 +5239,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/26') throw new Error('HUD 吸廊 20/26');
+  if (roomHudText(hudXi) !== '吸廊 · 20/27') throw new Error('HUD 吸廊 20/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -5277,7 +5460,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/26') throw new Error('HUD 冲廊 21/26');
+  if (roomHudText(hudChong) !== '冲廊 · 21/27') throw new Error('HUD 冲廊 21/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -5519,7 +5702,7 @@ function selfCheck() {
   if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/26') throw new Error('HUD 裂廊 22/26');
+  if (roomHudText(hudLie) !== '裂廊 · 22/27') throw new Error('HUD 裂廊 22/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -5799,10 +5982,10 @@ function selfCheck() {
   if (guan.roomName !== '晕廊') throw new Error('core advances to 晕廊');
   const hudGuan = makeState();
   resetRoom(hudGuan, 22, false);
-  if (roomHudText(hudGuan) !== '贯廊 · 23/26') throw new Error('HUD 贯廊 23/26');
+  if (roomHudText(hudGuan) !== '贯廊 · 23/27') throw new Error('HUD 贯廊 23/27');
   const hudChong23 = makeState();
   resetRoom(hudChong23, 20, false);
-  if (roomHudText(hudChong23) !== '冲廊 · 21/26') throw new Error('HUD 冲廊 21/26');
+  if (roomHudText(hudChong23) !== '冲廊 · 21/27') throw new Error('HUD 冲廊 21/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
@@ -6239,6 +6422,164 @@ function selfCheck() {
   update(shoveBump, 0.016);
   if (shoveBump.player.hearts >= 3) throw new Error('after shove bump hurts');
 
+  const baitOn = makeState();
+  resetRoom(baitOn, 0, false);
+  baitOn.baitReady = true;
+  baitOn.dashBoomReady = true;
+  baitOn.hasteReady = true;
+  explode(baitOn, 200, 200, false);
+  if (baitOn.baitReady !== false) throw new Error('baitReady consumed on boom');
+  if (!baitOn.baits || baitOn.baits.length !== 1) throw new Error('plants one bait');
+  if (baitOn.baits[0].x !== 200 || baitOn.baits[0].y !== 200) throw new Error('bait at blast');
+  if (Math.abs(baitOn.baits[0].t - BAIT_T) > 1e-9) throw new Error('bait t is BAIT_T');
+  if (baitOn.toast !== TOAST.baitUse) throw new Error('诱出来了');
+  if (baitOn.dashBoomReady !== true) throw new Error('bait boom keeps 冲爆');
+  if (baitOn.hasteReady !== true) throw new Error('bait boom keeps 急燃');
+
+  const baitWet = makeState();
+  resetRoom(baitWet, 0, false);
+  baitWet.baitReady = true;
+  baitWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(baitWet, 120, 120, false);
+  if (!baitWet.sparks[0].wet) throw new Error('bait wet spark');
+  for (let i = 0; i < 24; i++) update(baitWet, 0.1);
+  if (baitWet.baitReady !== true) throw new Error('wet keeps 诱爆');
+  if (baitWet.stats.booms !== 0) throw new Error('wet bait no boom');
+  if (baitWet.baits.length !== 0) throw new Error('wet does not plant bait');
+
+  const baitKeepDrop = makeState();
+  resetRoom(baitKeepDrop, 0, false);
+  baitKeepDrop.baitReady = true;
+  dropSpark(baitKeepDrop, 200, 200, false);
+  if (baitKeepDrop.baitReady !== true) throw new Error('dropSpark keeps 诱爆');
+  baitKeepDrop.player.x = 80;
+  baitKeepDrop.player.y = 80;
+  baitKeepDrop.input.dash = true;
+  update(baitKeepDrop, 0.016);
+  if (baitKeepDrop.baitReady !== true) throw new Error('dash keeps 诱爆');
+  baitKeepDrop.player.dashT = 0;
+  baitKeepDrop.player.dashCd = 0;
+  baitKeepDrop.hitstop = 0;
+  baitKeepDrop.dashBoomReady = true;
+  baitKeepDrop.input.dash = true;
+  update(baitKeepDrop, 0.016);
+  if (baitKeepDrop.baitReady !== true) throw new Error('冲爆 keeps 诱爆');
+  if (baitKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends');
+
+  const baitSatKeep = makeState();
+  resetRoom(baitSatKeep, 0, false);
+  baitSatKeep.splitReady = true;
+  baitSatKeep.player.faceX = 1;
+  baitSatKeep.player.faceY = 0;
+  explode(baitSatKeep, 400, 200, false);
+  baitSatKeep.baitReady = true;
+  baitSatKeep.echoReady = true;
+  baitSatKeep.splitReady = true;
+  baitSatKeep.suckReady = true;
+  baitSatKeep.seed = 1;
+  baitSatKeep.haloReady = true;
+  baitSatKeep.pierceReady = true;
+  baitSatKeep.frostReady = true;
+  baitSatKeep.shoveReady = true;
+  for (let i = 0; i < 10; i++) update(baitSatKeep, 0.05);
+  if (baitSatKeep.baitReady !== true) throw new Error('satellite keeps bait');
+  if (baitSatKeep.baits.length !== 0) throw new Error('satellite does not plant bait');
+  if (baitSatKeep.splitReady !== true) throw new Error('satellite keeps split with bait');
+  if (baitSatKeep.echoReady !== true) throw new Error('satellite keeps echo with bait');
+  if (baitSatKeep.suckReady !== true) throw new Error('satellite keeps suck with bait');
+  if (baitSatKeep.seed !== 1) throw new Error('satellite keeps seed with bait');
+  if (baitSatKeep.haloReady !== true) throw new Error('satellite keeps halo with bait');
+  if (baitSatKeep.pierceReady !== true) throw new Error('satellite keeps pierce with bait');
+  if (baitSatKeep.frostReady !== true) throw new Error('satellite keeps frost with bait');
+  if (baitSatKeep.shoveReady !== true) throw new Error('satellite keeps shove with bait');
+
+  const baitEchoKeep = makeState();
+  resetRoom(baitEchoKeep, 0, false);
+  baitEchoKeep.echoReady = true;
+  explode(baitEchoKeep, 400, 200, false);
+  baitEchoKeep.baitReady = true;
+  for (let i = 0; i < 12; i++) update(baitEchoKeep, 0.05);
+  if (baitEchoKeep.baitReady !== true) throw new Error('echo boom keeps bait');
+  if (baitEchoKeep.baits.length !== 0) throw new Error('echo boom does not plant bait');
+
+  const baitForkKeep = makeState();
+  resetRoom(baitForkKeep, 0, false);
+  baitForkKeep.baitReady = true;
+  baitForkKeep.frostReady = true;
+  baitForkKeep.shoveReady = true;
+  baitForkKeep.echoReady = true;
+  baitForkKeep.splitReady = true;
+  explode(baitForkKeep, 200, 200, false, false, false, { fork: true });
+  if (baitForkKeep.baitReady !== true) throw new Error('forked boom keeps bait');
+  if (baitForkKeep.baits.length !== 0) throw new Error('forked boom does not plant bait');
+  if (baitForkKeep.frostReady !== true) throw new Error('forked boom keeps frost');
+  if (baitForkKeep.shoveReady !== true) throw new Error('forked boom keeps shove');
+  if (baitForkKeep.echoReady !== true) throw new Error('forked boom keeps echo');
+  if (baitForkKeep.splitReady !== true) throw new Error('forked boom keeps split');
+
+  const baitPick = makeState();
+  resetRoom(baitPick, 0, false);
+  if (baitPick.baitReady) throw new Error('bait starts false');
+  baitPick.items.push({ kind: 'bait', x: baitPick.player.x, y: baitPick.player.y, r: 10, taken: false });
+  update(baitPick, 0.016);
+  if (baitPick.baitReady !== true) throw new Error('pick 诱爆');
+  if (baitPick.toast !== TOAST.baitGet) throw new Error('捡到诱爆 pick');
+
+  const baitWalk = makeState();
+  resetRoom(baitWalk, 0, false);
+  baitWalk.player.x = 80;
+  baitWalk.player.y = 80;
+  baitWalk.baits.push({ x: 200, y: 200, t: BAIT_T });
+  baitWalk.enemies.push(testFoe(200 + 80, 200));
+  const baitWalkX = baitWalk.enemies[0].x;
+  const baitWalkBooms = baitWalk.stats.booms;
+  baitWalk.hitstop = 0;
+  for (let i = 0; i < 6; i++) update(baitWalk, 0.05);
+  if (!(baitWalk.enemies[0].x < baitWalkX)) throw new Error('烬卫 walks toward bait');
+  for (let i = 0; i < 50; i++) {
+    baitWalk.hitstop = 0;
+    update(baitWalk, 0.1);
+  }
+  if (baitWalk.baits.length !== 0) throw new Error('bait pops after BAIT_T');
+  if (!(baitWalk.stats.booms > baitWalkBooms)) throw new Error('bait pop boom');
+
+  const baitWater = makeState();
+  resetRoom(baitWater, 0, false);
+  baitWater.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  baitWater.baits.push({ x: 120, y: 120, t: BAIT_T });
+  const baitWaterBooms = baitWater.stats.booms;
+  updateBaits(baitWater, 0.016);
+  if (baitWater.baits.length !== 0) throw new Error('bait in water fizzles');
+  if (baitWater.stats.booms !== baitWaterBooms) throw new Error('bait in water does not explode');
+
+  const baitPop = makeState();
+  resetRoom(baitPop, 0, false);
+  baitPop.player.x = 80;
+  baitPop.player.y = 80;
+  baitPop.baitReady = true;
+  baitPop.frostReady = true;
+  baitPop.shoveReady = true;
+  baitPop.echoReady = true;
+  baitPop.splitReady = true;
+  baitPop.haloReady = true;
+  baitPop.pierceReady = true;
+  baitPop.suckReady = true;
+  baitPop.seed = 1;
+  baitPop.baits.push({ x: 200, y: 200, t: 0 });
+  const baitPopBooms = baitPop.stats.booms;
+  updateBaits(baitPop, 0.016);
+  if (baitPop.baits.length !== 0) throw new Error('t=0 bait pops');
+  if (!(baitPop.stats.booms > baitPopBooms)) throw new Error('t=0 bait explodes');
+  if (baitPop.baitReady !== true) throw new Error('bait pop keeps baitReady');
+  if (baitPop.frostReady !== true) throw new Error('bait pop keeps frost');
+  if (baitPop.shoveReady !== true) throw new Error('bait pop keeps shove');
+  if (baitPop.echoReady !== true) throw new Error('bait pop keeps echo');
+  if (baitPop.splitReady !== true) throw new Error('bait pop keeps split');
+  if (baitPop.haloReady !== true) throw new Error('bait pop keeps halo');
+  if (baitPop.pierceReady !== true) throw new Error('bait pop keeps pierce');
+  if (baitPop.suckReady !== true) throw new Error('bait pop keeps suck');
+  if (baitPop.seed !== 1) throw new Error('bait pop keeps seed');
+
   const yun = makeState();
   resetRoom(yun, 23, false);
   if (yun.roomName !== '晕廊' || yun.roomId !== 'yunlang') throw new Error('yunlang load');
@@ -6358,10 +6699,10 @@ function selfCheck() {
   if (yun.roomName !== '冻廊') throw new Error('core advances to 冻廊');
   const hudYun = makeState();
   resetRoom(hudYun, 23, false);
-  if (roomHudText(hudYun) !== '晕廊 · 24/26') throw new Error('HUD 晕廊 24/26');
+  if (roomHudText(hudYun) !== '晕廊 · 24/27') throw new Error('HUD 晕廊 24/27');
   const hudLie24 = makeState();
   resetRoom(hudLie24, 21, false);
-  if (roomHudText(hudLie24) !== '裂廊 · 22/26') throw new Error('HUD 裂廊 22/26');
+  if (roomHudText(hudLie24) !== '裂廊 · 22/27') throw new Error('HUD 裂廊 22/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
@@ -6501,7 +6842,7 @@ function selfCheck() {
   if (dong.roomName !== '推廊') throw new Error('core advances to 推廊');
   const hudDong = makeState();
   resetRoom(hudDong, 24, false);
-  if (roomHudText(hudDong) !== '冻廊 · 25/26') throw new Error('HUD 冻廊 25/26');
+  if (roomHudText(hudDong) !== '冻廊 · 25/27') throw new Error('HUD 冻廊 25/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
@@ -6651,14 +6992,166 @@ function selfCheck() {
   explode(tui, tuiBox.x + tuiBox.w * 0.5, tuiBox.y - 20, false);
   if (!tuiBox.open) throw new Error('推廊 dry trail should open 心核');
   takeCore(tui, { x: 100, y: 100 });
-  if (!tui.won || tui.toast !== TOAST.all) throw new Error('推廊 should 通关');
+  if (tui.won) throw new Error('推廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(tui, 0.1);
+  if (tui.roomName !== '诱廊') throw new Error('core advances to 诱廊');
   const hudTui = makeState();
   resetRoom(hudTui, 25, false);
-  if (roomHudText(hudTui) !== '推廊 · 26/26') throw new Error('HUD 推廊 26/26');
+  if (roomHudText(hudTui) !== '推廊 · 26/27') throw new Error('HUD 推廊 26/27');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHOVE_V !== 280) throw new Error('SHOVE_V 280');
   if (SHOVE_T !== 0.40) throw new Error('SHOVE_T 0.40');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+
+  const yin = makeState();
+  resetRoom(yin, 26, false);
+  if (yin.roomName !== '诱廊' || yin.roomId !== 'yinlang') throw new Error('yinlang load');
+  if (yin.toast !== TOAST.baitRoom) throw new Error('诱廊 intro');
+  if (yin.roomW !== 960 || yin.roomH !== 400) throw new Error('诱廊 size');
+  if (yin.player.x !== 80 || yin.player.y !== 200) throw new Error('诱廊 spawn');
+  if (yin.baitReady) throw new Error('诱廊 bait starts false');
+  if (yin.baits && yin.baits.length) throw new Error('诱廊 baits start empty');
+  let yinStill = 0;
+  let yinTide = 0;
+  for (let i = 0; i < yin.waters.length; i++) {
+    if (yin.waters[i].tide) yinTide += 1;
+    else yinStill += 1;
+  }
+  if (yinStill < 1) throw new Error('诱廊 needs static 水洼');
+  if (yinTide) throw new Error('诱廊 no tide');
+  let yinCore = 0;
+  let yinHeal = 0;
+  let yinThick = 0;
+  let yinBaitItem = 0;
+  let yinShoveItem = 0;
+  let yinFrostItem = 0;
+  let yinHaloItem = 0;
+  let yinPierceItem = 0;
+  let yinSplitItem = 0;
+  let yinDashItem = 0;
+  let yinSuckItem = 0;
+  let yinEchoItem = 0;
+  let yinHasteItem = 0;
+  let yinSeedItem = 0;
+  for (let i = 0; i < yin.crates.length; i++) {
+    if (yin.crates[i].loot === 'core') yinCore += 1;
+    if (yin.crates[i].loot === 'heal') yinHeal += 1;
+    if (yin.crates[i].thick) yinThick += 1;
+  }
+  for (let i = 0; i < yin.items.length; i++) {
+    if (yin.items[i].kind === 'bait') yinBaitItem += 1;
+    if (yin.items[i].kind === 'shove') yinShoveItem += 1;
+    if (yin.items[i].kind === 'frost') yinFrostItem += 1;
+    if (yin.items[i].kind === 'halo') yinHaloItem += 1;
+    if (yin.items[i].kind === 'pierce') yinPierceItem += 1;
+    if (yin.items[i].kind === 'split') yinSplitItem += 1;
+    if (yin.items[i].kind === 'dashboom') yinDashItem += 1;
+    if (yin.items[i].kind === 'suck') yinSuckItem += 1;
+    if (yin.items[i].kind === 'echo') yinEchoItem += 1;
+    if (yin.items[i].kind === 'haste') yinHasteItem += 1;
+    if (yin.items[i].kind === 'seed') yinSeedItem += 1;
+  }
+  if (yinBaitItem < 1) throw new Error('诱廊 needs 诱爆');
+  if (yinShoveItem || yinFrostItem || yinHaloItem || yinPierceItem || yinSplitItem || yinDashItem || yinSuckItem || yinEchoItem || yinHasteItem || yinSeedItem) {
+    throw new Error('诱廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆/霜爆/推爆');
+  }
+  if (yinCore !== 1) throw new Error('诱廊 心核');
+  if (yinHeal < 1) throw new Error('诱廊 回星');
+  const yinBox = yin.crates.find(function (c) { return c.loot === 'core'; });
+  if (!yinBox || yinBox.thick) throw new Error('诱廊 心核 crate is not thick');
+  if (yinThick) throw new Error('诱廊 no thick crate');
+  let yinHound = 0;
+  let yinGuard = 0;
+  let yinMoth = 0;
+  let yinEater = 0;
+  for (let i = 0; i < yin.enemies.length; i++) {
+    if (isHound(yin.enemies[i])) yinHound += 1;
+    else if (isMoth(yin.enemies[i])) yinMoth += 1;
+    else if (isEater(yin.enemies[i])) yinEater += 1;
+    else yinGuard += 1;
+  }
+  if (yinGuard !== 2 || yinHound !== 0 || yinMoth !== 0 || yinEater !== 0) {
+    throw new Error('诱廊 烬卫 only');
+  }
+  if (inWater(yin, 80, 200) || inOil(yin, 80, 200)) throw new Error('诱廊 spawn dry');
+  if (inWater(yin, 260, 200) || inOil(yin, 260, 200)) throw new Error('诱廊 诱爆 dry');
+  if (inOil(yin, 860, 188) || inWater(yin, 860, 188)) throw new Error('诱廊 core dry');
+  if (inWater(yin, 380, 200) || inOil(yin, 380, 200)) throw new Error('诱廊 plant dry');
+  if (!inWater(yin, 450, 350)) throw new Error('诱廊 wet bag');
+  if (inWater(yin, 400, 100)) throw new Error('诱廊 north shelf wet');
+  for (let i = 0; i < yin.crates.length; i++) {
+    const c = yin.crates[i];
+    if (circleRect(yin.player.x, yin.player.y, yin.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('诱廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 430; x += 10) {
+    for (let i = 0; i < yin.crates.length; i++) {
+      const c = yin.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('诱廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 480; x += 20) {
+    for (let y = 80; y <= 120; y += 20) {
+      if (inWater(yin, x, y)) throw new Error('诱廊 north puddle');
+      for (let i = 0; i < yin.enemies.length; i++) {
+        const e = yin.enemies[i];
+        if (dist(e.x, e.y, x, y) < e.r + 8) throw new Error('诱廊 north enemy');
+      }
+    }
+  }
+  for (let i = 0; i < yin.enemies.length; i++) {
+    const e = yin.enemies[i];
+    if (dist(e.x, e.y, 380, 200) <= BLAST_R + e.r) throw new Error('BLAST_R at plant does not hit the guards');
+    if (dist(e.x, e.y, 380, 200) > BAIT_SEE) throw new Error('BAIT_SEE from plant reaches both');
+  }
+  yin.player.x = yin.enemies[0].x;
+  yin.player.y = yin.enemies[0].y;
+  yin.player.hearts = 3;
+  yin.player.inv = 0;
+  yin.player.dashT = 0;
+  update(yin, 0.016);
+  if (yin.player.hearts >= 3) throw new Error('walking the choke without bait still bump-hurts');
+  yin.player.x = 80;
+  yin.player.y = 80;
+  yin.player.hearts = 3;
+  yin.player.inv = 0;
+  yin.hitstop = 0;
+  yin.embers.length = 0;
+  yin.baitReady = true;
+  explode(yin, 380, 200, false);
+  if (yin.baitReady) throw new Error('诱廊 bait spends');
+  if (!yin.baits || yin.baits.length !== 1) throw new Error('诱廊 plants one bait');
+  if (yin.baits[0].x !== 380 || yin.baits[0].y !== 200) throw new Error('诱廊 bait at plant');
+  if (yin.enemies[0].hp !== ENEMY_HP || yin.enemies[1].hp !== ENEMY_HP) {
+    throw new Error('诱廊 plant boom misses guards');
+  }
+  yin.hitstop = 0;
+  yin.embers.length = 0;
+  yin.player.x = 860;
+  yin.player.y = 80;
+  const yx0 = yin.enemies[0].x;
+  const yx1 = yin.enemies[1].x;
+  for (let i = 0; i < 8; i++) update(yin, 0.05);
+  if (!(yin.enemies[0].x < yx0) || !(yin.enemies[1].x < yx1)) {
+    throw new Error('烬卫 walk west toward bait');
+  }
+  explode(yin, yinBox.x + yinBox.w * 0.5, yinBox.y - 20, false);
+  if (!yinBox.open) throw new Error('诱廊 dry trail should open 心核');
+  takeCore(yin, { x: 100, y: 100 });
+  if (!yin.won || yin.toast !== TOAST.all) throw new Error('诱廊 should 通关');
+  const hudYin = makeState();
+  resetRoom(hudYin, 26, false);
+  if (roomHudText(hudYin) !== '诱廊 · 27/27') throw new Error('HUD 诱廊 27/27');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
+  if (BAIT_SEE !== 240) throw new Error('BAIT_SEE 240');
+  if (BAIT_R !== 11) throw new Error('BAIT_R 11');
+  if (BAIT_HIT !== 16) throw new Error('BAIT_HIT 16');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
 
   console.log('selfCheck ok', {
