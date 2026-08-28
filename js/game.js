@@ -78,6 +78,7 @@ const TOAST = {
   lure: '爆能引开灯蛾',
   ember: '别踩余烬',
   ash: '余烬还烫',
+  ring: '绕环能连环',
 };
 
 const COL = {
@@ -357,6 +358,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '回廊') toast(s, TOAST.loop, 1.3, COL.gold);
   else if (room.name === '灯巷') toast(s, TOAST.lure, 1.4, COL.gold);
   else if (room.name === '灰径') toast(s, TOAST.ash, 1.4, COL.ember);
+  else if (room.name === '环行') toast(s, TOAST.ring, 1.4, COL.gold);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1511,9 +1513,9 @@ function selfCheck() {
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || (ROOMS.length !== 11 && ROOMS.length !== 12)) throw new Error('need 11 or 12 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径'];
-  for (let i = 0; i < 11; i++) {
+  if (!ROOMS || ROOMS.length !== 12) throw new Error('need 12 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行'];
+  for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
     }
@@ -1524,7 +1526,8 @@ function selfCheck() {
   if (ROOMS[8].id !== 'huilang') throw new Error('回廊 id');
   if (ROOMS[9].id !== 'dengxiang') throw new Error('灯巷 id');
   if (ROOMS[10].id !== 'huijing') throw new Error('灰径 id');
-  if (ROOMS.length === 12 && ROOMS[11].name !== '密线') throw new Error('room 12 密线');
+  if (ROOMS[11].id !== 'huanxing') throw new Error('环行 id');
+  if (ROOMS[11].name !== '环行') throw new Error('room 12 环行');
 
   const fitJ = roomFit({ roomW: 960, roomH: 140 });
   if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
@@ -1658,10 +1661,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/11') throw new Error('HUD 空场 1/11');
+  if (roomHudText(hud0) !== '空场 · 1/12') throw new Error('HUD 空场 1/12');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/11') throw new Error('HUD 3/11');
+  if (roomHudText(hud2) !== '水巷 · 3/12') throw new Error('HUD 3/12');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -1867,11 +1870,63 @@ function selfCheck() {
   }
   if (ashCore !== 1) throw new Error('灰径 心核');
   takeCore(ashRoom, { x: 100, y: 100 });
-  if (!ashRoom.won || ashRoom.toast !== TOAST.all) throw new Error('灰径 should 通关');
+  if (ashRoom.won) throw new Error('灰径 should not 通关');
+  for (let i = 0; i < 20; i++) update(ashRoom, 0.1);
+  if (ashRoom.roomName !== '环行') throw new Error('core advances to 环行');
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/11') throw new Error('HUD 灰径 11/11');
+  if (roomHudText(hudAsh) !== '灰径 · 11/12') throw new Error('HUD 灰径 11/12');
+
+  const ring = makeState();
+  resetRoom(ring, 11, false);
+  if (ring.roomName !== '环行' || ring.roomId !== 'huanxing') throw new Error('huanxing load');
+  if (ring.toast !== TOAST.ring) throw new Error('环行 intro');
+  if (TOAST.ring !== '绕环能连环') throw new Error('绕环能连环');
+  let ringHound = 0;
+  for (let i = 0; i < ring.enemies.length; i++) {
+    if (isHound(ring.enemies[i])) ringHound += 1;
+  }
+  if (ringHound !== 2) throw new Error('环行 2 循辙');
+  const ringCore = ring.crates.find(function (c) { return c.loot === 'core'; });
+  if (!ringCore) throw new Error('环行 心核');
+  const holeX = ringCore.x + ringCore.w * 0.5;
+  const holeY = ringCore.y + ringCore.h * 0.5;
+  if (dist(holeX, holeY, ring.roomW * 0.5, ring.roomH * 0.5) > 40) {
+    throw new Error('环行 core in the hole');
+  }
+  if (ring.waters.length) throw new Error('环行 dry so fuse loops');
+  takeCore(ring, { x: 100, y: 100 });
+  if (!ring.won || ring.toast !== TOAST.all) throw new Error('环行 should 通关');
+
+  const hudRing = makeState();
+  resetRoom(hudRing, 11, false);
+  if (roomHudText(hudRing) !== '环行 · 12/12') throw new Error('HUD 环行 12/12');
+
+  const ringRun = makeState();
+  resetRoom(ringRun, 11, false);
+  const rr = ringRun.enemies.find(function (e) { return isHound(e); });
+  if (!rr) throw new Error('环行 循辙 for circle');
+  const rrX = rr.x;
+  const rrY = rr.y;
+  const idleRing = makeState();
+  resetRoom(idleRing, 11, false);
+  const ir = idleRing.enemies.find(function (e) { return isHound(e); });
+  const irX = ir.x;
+  const irY = ir.y;
+  for (let i = 0; i < 20; i++) update(idleRing, 0.05);
+  const ringIdleD = dist(ir.x, ir.y, irX, irY);
+  const rcx = 480;
+  const rcy = 270;
+  const rcr = 180;
+  const ringSteps = 28;
+  for (let i = 0; i <= ringSteps; i++) {
+    const a = (Math.PI * 2 * i) / ringSteps;
+    dropSpark(ringRun, rcx + Math.cos(a) * rcr, rcy + Math.sin(a) * rcr, false);
+  }
+  for (let i = 0; i < 20; i++) update(ringRun, 0.05);
+  const ringRoadD = dist(rr.x, rr.y, rrX, rrY);
+  if (ringRoadD <= ringIdleD + 10) throw new Error('环行 循辙 should run the circle');
 
   const em = makeState();
   resetRoom(em, 0, false);
