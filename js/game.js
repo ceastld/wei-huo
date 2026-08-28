@@ -16,6 +16,8 @@ const BAIT_T = 2.0;
 const BAIT_SEE = 240;
 const BAIT_R = 11;
 const BAIT_HIT = 16;
+const BOLT_R = 170;
+const BOLT_N = 3;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -91,6 +93,7 @@ const NAMES = {
   frost: '霜爆',
   shove: '推爆',
   bait: '诱爆',
+  bolt: '雷爆',
   eater: '拾烬',
   shell: '壳卫',
 };
@@ -166,6 +169,9 @@ const TOAST = {
   baitGet: '捡到诱爆',
   baitUse: '诱出来了',
   baitRoom: '诱爆会引开',
+  boltGet: '捡到雷爆',
+  boltUse: '雷劈了',
+  boltRoom: '雷爆会劈远',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -188,6 +194,7 @@ const COL = {
   frost: '#9ef0ff',
   shove: '#ff5a3a',
   bait: '#ffb020',
+  bolt: '#6ec8ff',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -415,6 +422,7 @@ function lootKind(drop) {
   if (drop === '霜爆' || drop === 'frost') return 'frost';
   if (drop === '推爆' || drop === 'shove') return 'shove';
   if (drop === '诱爆' || drop === 'bait') return 'bait';
+  if (drop === '雷爆' || drop === 'bolt') return 'bolt';
   return null;
 }
 
@@ -476,7 +484,9 @@ function makeState() {
     frostReady: false,
     shoveReady: false,
     baitReady: false,
+    boltReady: false,
     baits: [],
+    bolts: [],
     echoes: [],
     echoing: false,
     splits: [],
@@ -536,6 +546,7 @@ function resetRoom(s, index, keepHearts) {
   s.frostReady = false;
   s.shoveReady = false;
   s.baitReady = false;
+  s.boltReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -548,6 +559,8 @@ function resetRoom(s, index, keepHearts) {
   s.halos.length = 0;
   if (!s.baits) s.baits = [];
   s.baits.length = 0;
+  if (!s.bolts) s.bolts = [];
+  s.bolts.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -651,6 +664,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '推廊') toast(s, TOAST.shoveRoom, 1.4, COL.shove);
   else if (room.name === '诱廊') toast(s, TOAST.baitRoom, 1.4, COL.bait);
   else if (room.name === '壳廊') toast(s, TOAST.shellRoom, 1.4, COL.shell);
+  else if (room.name === '雷廊') toast(s, TOAST.boltRoom, 1.4, COL.bolt);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1086,6 +1100,14 @@ function updateBaits(s, dt) {
   }
 }
 
+function updateBolts(s, dt) {
+  if (!s.bolts || !s.bolts.length) return;
+  for (let i = s.bolts.length - 1; i >= 0; i--) {
+    s.bolts[i].t -= dt;
+    if (s.bolts[i].t <= 0) s.bolts.splice(i, 1);
+  }
+}
+
 function explode(s, x, y, hot, fused, haste, opts) {
   const echoing = opts === true || (opts && opts.echo) || !!s.echoing;
   const splitting = !!(opts && opts.split) || !!s.splitting;
@@ -1116,6 +1138,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.baitReady) {
     s.baitReady = false;
     baited = true;
+  }
+  let bolted = false;
+  if (!forked && s.boltReady) {
+    s.boltReady = false;
+    bolted = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -1432,6 +1459,64 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 170);
     }
   }
+  if (bolted) {
+    const cand = [];
+    for (let i = 0; i < s.enemies.length; i++) {
+      const e = s.enemies[i];
+      if (e.hp <= 0) continue;
+      const ed = dist(e.x, e.y, x, y);
+      const eHurt = halo
+        ? (ed >= RING_IN - e.r && ed <= RING_OUT + e.r)
+        : (ed <= r + e.r);
+      if (eHurt) continue;
+      if (ed > BOLT_R) continue;
+      cand.push({ e: e, d: ed });
+    }
+    cand.sort(function (a, b) { return a.d - b.d; });
+    const n = Math.min(BOLT_N, cand.length);
+    if (!s.bolts) s.bolts = [];
+    for (let i = 0; i < n; i++) {
+      const e = cand[i].e;
+      if (isShell(e) && !hot) {
+        e.hitT = 0.10;
+        const dClang = dist(e.x, e.y, x, y) || 1;
+        e.x += ((e.x - x) / dClang) * 12;
+        e.y += ((e.y - y) / dClang) * 12;
+        if (!reducedMotion()) burst(s, e.x, e.y, 4, COL.shell, 80);
+        if ((s.shellClangT || 0) <= 0) {
+          toast(s, TOAST.shellClang, 1.0, COL.shell);
+          s.shellClangT = 1.6;
+        }
+      } else {
+        if (isShell(e)) {
+          e.hp -= 1;
+          if (!reducedMotion()) {
+            burst(s, e.x, e.y, 4, COL.shell, 90);
+            burst(s, e.x, e.y, 4, COL.gold, 90);
+            punch(s, 4);
+          }
+        } else {
+          e.hp -= 1;
+        }
+        e.hitT = 0.18;
+        const d = dist(e.x, e.y, x, y) || 1;
+        e.x += ((e.x - x) / d) * 12;
+        e.y += ((e.y - y) / d) * 12;
+        if (e.hp <= 0) foeDown(s, e);
+      }
+      s.bolts.push({ x0: x, y0: y, x1: e.x, y1: e.y, t: 0.22 });
+    }
+    if (n >= 1) {
+      toast(s, TOAST.boltUse, 1.1, COL.bolt);
+      burst(s, x, y, 6, COL.bolt, 170);
+      if (!reducedMotion()) {
+        punch(s, 8);
+        s.hitstop = Math.max(s.hitstop, 0.05);
+      }
+    } else {
+      burst(s, x, y, 3, COL.bolt, 80);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -1682,6 +1767,7 @@ function watchSteer(s, dt) {
   let frostIt = null;
   let shoveIt = null;
   let baitIt = null;
+  let boltIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -1697,8 +1783,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'frost') frostIt = it;
     if (it.kind === 'shove') shoveIt = it;
     if (it.kind === 'bait') baitIt = it;
+    if (it.kind === 'bolt') boltIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt);
 
   let guard = null;
   let gd = 1e9;
@@ -1780,6 +1867,10 @@ function watchSteer(s, dt) {
   } else if (!s.baitReady && baitIt) {
     tx = baitIt.x - p.x;
     ty = baitIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.boltReady && boltIt) {
+    tx = boltIt.x - p.x;
+    ty = boltIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -1949,6 +2040,7 @@ function update(s, dt) {
     updateSplits(s, dt);
     updateEmbers(s, dt, false);
     updateBaits(s, dt);
+    updateBolts(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
   }
@@ -1959,6 +2051,7 @@ function update(s, dt) {
     updateSplits(s, dt);
     updateEmbers(s, dt, false);
     updateBaits(s, dt);
+    updateBolts(s, dt);
     return;
   }
 
@@ -2061,6 +2154,7 @@ function update(s, dt) {
   updateSplits(s, dt);
   updateEmbers(s, dt, true);
   updateBaits(s, dt);
+  updateBolts(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
@@ -2177,6 +2271,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.gold, 130);
       burst(s, it.x, it.y, 4, COL.bait, 110);
+      punch(s, 3);
+    } else if (it.kind === 'bolt') {
+      s.boltReady = true;
+      toast(s, TOAST.boltGet, 1.1, COL.bolt);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.bolt, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -2674,6 +2775,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.bait, it.x, it.y - 16);
+    } else if (it.kind === 'bolt') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.bolt, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.bolt;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.bolt;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.bolt, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -2711,6 +2827,51 @@ function draw(s, ctx) {
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('诱', b.x, b.y - BAIT_R - 6);
+  }
+
+  for (let i = 0; i < (s.bolts || []).length; i++) {
+    const b = s.bolts[i];
+    const k = clamp(b.t / 0.22, 0, 1);
+    const dx = b.x1 - b.x0;
+    const dy = b.y1 - b.y0;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = COL.bolt;
+    if (reducedMotion()) {
+      ctx.globalAlpha = 0.55 + 0.35 * k;
+      ctx.lineWidth = 1.4 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(b.x0, b.y0);
+      ctx.lineTo(b.x1, b.y1);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const seed = b.x0 * 0.013 + b.y0 * 0.021 + b.x1 * 0.017 + b.y1 * 0.011;
+      ctx.globalAlpha = 0.35 + 0.55 * k;
+      ctx.lineWidth = (2.4 + 1.2 * k) / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(b.x0, b.y0);
+      const mids = 3;
+      for (let j = 1; j <= mids; j++) {
+        const t = j / (mids + 1);
+        const jog = Math.sin(seed + j * 2.7) * 12;
+        ctx.lineTo(b.x0 + dx * t + nx * jog, b.y0 + dy * t + ny * jog);
+      }
+      ctx.lineTo(b.x1, b.y1);
+      ctx.stroke();
+      ctx.globalAlpha = 0.2 * k;
+      ctx.lineWidth = (6 * k) / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(b.x0, b.y0);
+      ctx.lineTo(b.x1, b.y1);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      glow(ctx, b.x0, b.y0, 12 * k, COL.bolt, 0.4 * k);
+      glow(ctx, b.x1, b.y1, 10 * k, COL.gold, 0.32 * k);
+    }
   }
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3156,6 +3317,27 @@ function draw(s, ctx) {
     ctx.arc(bx, by, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.boltReady) {
+    let lx;
+    let ly;
+    if (reducedMotion()) {
+      lx = p.x + 12;
+      ly = p.y - 10;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3;
+      lx = p.x + Math.cos(a) * 16;
+      ly = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, lx, ly, 8, COL.bolt, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.bolt;
+    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(lx, ly, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -3396,6 +3578,14 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (shoveEl && s.baitReady && !s.shoveReady) {
     shoveEl.textContent = NAMES.bait;
   }
+  const boltEl = (typeof document !== 'undefined') ? document.getElementById('bolt') : null;
+  if (boltEl) {
+    boltEl.textContent = s.boltReady ? NAMES.bolt : '';
+  } else if (baitEl && s.boltReady && !s.baitReady) {
+    baitEl.textContent = NAMES.bolt;
+  } else if (shoveEl && s.boltReady && !s.shoveReady) {
+    shoveEl.textContent = NAMES.bolt;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -3491,10 +3681,12 @@ function selfCheck() {
   if (BAIT_SEE !== 240) throw new Error('BAIT_SEE 240');
   if (BAIT_R !== 11) throw new Error('BAIT_R 11');
   if (BAIT_HIT !== 16) throw new Error('BAIT_HIT 16');
+  if (BOLT_R !== 170) throw new Error('BOLT_R 170');
+  if (BOLT_N !== 3) throw new Error('BOLT_N 3');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 28) throw new Error('need 28 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊'];
+  if (!ROOMS || ROOMS.length !== 29) throw new Error('need 29 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -3540,6 +3732,8 @@ function selfCheck() {
   if (ROOMS[26].name !== '诱廊') throw new Error('room 27 诱廊');
   if (ROOMS[27].id !== 'qiaolang') throw new Error('壳廊 id');
   if (ROOMS[27].name !== '壳廊') throw new Error('room 28 壳廊');
+  if (ROOMS[28].id !== 'leilang') throw new Error('雷廊 id');
+  if (ROOMS[28].name !== '雷廊') throw new Error('room 29 雷廊');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -3557,7 +3751,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '壳卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '壳卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -3714,10 +3908,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/28') throw new Error('HUD 空场 1/28');
+  if (roomHudText(hud0) !== '空场 · 1/29') throw new Error('HUD 空场 1/29');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/28') throw new Error('HUD 3/28');
+  if (roomHudText(hud2) !== '水巷 · 3/29') throw new Error('HUD 3/29');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -3929,7 +4123,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/28') throw new Error('HUD 灰径 11/28');
+  if (roomHudText(hudAsh) !== '灰径 · 11/29') throw new Error('HUD 灰径 11/29');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -3956,7 +4150,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/28') throw new Error('HUD 环行 12/28');
+  if (roomHudText(hudRing) !== '环行 · 12/29') throw new Error('HUD 环行 12/29');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -3985,7 +4179,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/28') throw new Error('HUD 密线 13/28');
+  if (roomHudText(hudWire) !== '密线 · 13/29') throw new Error('HUD 密线 13/29');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -4301,7 +4495,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/28') throw new Error('HUD 潮廊 14/28');
+  if (roomHudText(hudChao) !== '潮廊 · 14/29') throw new Error('HUD 潮廊 14/29');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -4368,7 +4562,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/28') throw new Error('HUD 种廊 15/28');
+  if (roomHudText(hudZhong) !== '种廊 · 15/29') throw new Error('HUD 种廊 15/29');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -4495,7 +4689,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/28') throw new Error('HUD 油廊 16/28');
+  if (roomHudText(hudYou) !== '油廊 · 16/29') throw new Error('HUD 油廊 16/29');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -4573,7 +4767,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/28') throw new Error('HUD 急廊 17/28');
+  if (roomHudText(hudJi) !== '急廊 · 17/29') throw new Error('HUD 急廊 17/29');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -4916,7 +5110,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/28') throw new Error('HUD 拾廊 18/28');
+  if (roomHudText(hudShi) !== '拾廊 · 18/29') throw new Error('HUD 拾廊 18/29');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -4988,6 +5182,14 @@ function selfCheck() {
   if (TOAST.baitUse !== '诱出来了') throw new Error('诱出来了');
   if (TOAST.baitRoom !== '诱爆会引开') throw new Error('诱爆会引开');
   if (lootKind('诱爆') !== 'bait' || lootKind('bait') !== 'bait') throw new Error('lootKind 诱爆');
+  if (NAMES.bolt !== '雷爆') throw new Error('雷爆 name');
+  if (COL.bolt !== '#6ec8ff') throw new Error('COL.bolt');
+  if (BOLT_R !== 170) throw new Error('BOLT_R 170');
+  if (BOLT_N !== 3) throw new Error('BOLT_N 3');
+  if (TOAST.boltGet !== '捡到雷爆') throw new Error('捡到雷爆');
+  if (TOAST.boltUse !== '雷劈了') throw new Error('雷劈了');
+  if (TOAST.boltRoom !== '雷爆会劈远') throw new Error('雷爆会劈远');
+  if (lootKind('雷爆') !== 'bolt' || lootKind('bolt') !== 'bolt') throw new Error('lootKind 雷爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -5166,7 +5368,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/28') throw new Error('HUD 响廊 19/28');
+  if (roomHudText(hudXiang) !== '响廊 · 19/29') throw new Error('HUD 响廊 19/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -5358,7 +5560,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/28') throw new Error('HUD 吸廊 20/28');
+  if (roomHudText(hudXi) !== '吸廊 · 20/29') throw new Error('HUD 吸廊 20/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -5579,7 +5781,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/28') throw new Error('HUD 冲廊 21/28');
+  if (roomHudText(hudChong) !== '冲廊 · 21/29') throw new Error('HUD 冲廊 21/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -5821,7 +6023,7 @@ function selfCheck() {
   if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/28') throw new Error('HUD 裂廊 22/28');
+  if (roomHudText(hudLie) !== '裂廊 · 22/29') throw new Error('HUD 裂廊 22/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -6101,10 +6303,10 @@ function selfCheck() {
   if (guan.roomName !== '晕廊') throw new Error('core advances to 晕廊');
   const hudGuan = makeState();
   resetRoom(hudGuan, 22, false);
-  if (roomHudText(hudGuan) !== '贯廊 · 23/28') throw new Error('HUD 贯廊 23/28');
+  if (roomHudText(hudGuan) !== '贯廊 · 23/29') throw new Error('HUD 贯廊 23/29');
   const hudChong23 = makeState();
   resetRoom(hudChong23, 20, false);
-  if (roomHudText(hudChong23) !== '冲廊 · 21/28') throw new Error('HUD 冲廊 21/28');
+  if (roomHudText(hudChong23) !== '冲廊 · 21/29') throw new Error('HUD 冲廊 21/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
@@ -6699,6 +6901,134 @@ function selfCheck() {
   if (baitPop.suckReady !== true) throw new Error('bait pop keeps suck');
   if (baitPop.seed !== 1) throw new Error('bait pop keeps seed');
 
+  const boltOn = makeState();
+  resetRoom(boltOn, 0, false);
+  boltOn.enemies.push(testFoe(400 + 120, 200));
+  boltOn.enemies.push(testFoe(400 + 140, 200));
+  boltOn.enemies.push(testFoe(400 + 160, 200));
+  boltOn.boltReady = true;
+  boltOn.dashBoomReady = true;
+  boltOn.hasteReady = true;
+  explode(boltOn, 400, 200, false);
+  if (boltOn.boltReady !== false) throw new Error('boltReady consumed on boom');
+  if (boltOn.enemies[0].hp !== ENEMY_HP - 1) throw new Error('bolt 120 1 dmg');
+  if (boltOn.enemies[1].hp !== ENEMY_HP - 1) throw new Error('bolt 140 1 dmg');
+  if (boltOn.enemies[2].hp !== ENEMY_HP - 1) throw new Error('bolt 160 1 dmg');
+  if (!boltOn.bolts || boltOn.bolts.length !== 3) throw new Error('three bolt arcs');
+  if (boltOn.toast !== TOAST.boltUse) throw new Error('雷劈了');
+  if (boltOn.dashBoomReady !== true) throw new Error('bolt boom keeps 冲爆');
+  if (boltOn.hasteReady !== true) throw new Error('bolt boom keeps 急燃');
+
+  const boltInside = makeState();
+  resetRoom(boltInside, 0, false);
+  boltInside.enemies.push(testFoe(400, 200));
+  const insideHp = boltInside.enemies[0].hp;
+  boltInside.boltReady = true;
+  explode(boltInside, 400, 200, false);
+  if (boltInside.boltReady !== false) throw new Error('empty outer ring still spends bolt');
+  if (boltInside.enemies[0].hp !== insideHp - 1) throw new Error('inside blast still 1 from boom not bolt');
+  if (boltInside.bolts && boltInside.bolts.length) throw new Error('no arc on blast-hit foe');
+  if (boltInside.toast === TOAST.boltUse) throw new Error('no 雷劈了 when 0 arcs');
+
+  const boltWet = makeState();
+  resetRoom(boltWet, 0, false);
+  boltWet.boltReady = true;
+  boltWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(boltWet, 120, 120, false);
+  if (!boltWet.sparks[0].wet) throw new Error('bolt wet spark');
+  for (let i = 0; i < 24; i++) update(boltWet, 0.1);
+  if (boltWet.boltReady !== true) throw new Error('wet keeps 雷爆');
+  if (boltWet.stats.booms !== 0) throw new Error('wet bolt no boom');
+  if (boltWet.bolts && boltWet.bolts.length) throw new Error('wet does not zap');
+
+  const boltKeepDrop = makeState();
+  resetRoom(boltKeepDrop, 0, false);
+  boltKeepDrop.boltReady = true;
+  dropSpark(boltKeepDrop, 200, 200, false);
+  if (boltKeepDrop.boltReady !== true) throw new Error('dropSpark keeps 雷爆');
+  boltKeepDrop.player.x = 80;
+  boltKeepDrop.player.y = 80;
+  boltKeepDrop.input.dash = true;
+  update(boltKeepDrop, 0.016);
+  if (boltKeepDrop.boltReady !== true) throw new Error('dash keeps 雷爆');
+  boltKeepDrop.player.dashT = 0;
+  boltKeepDrop.player.dashCd = 0;
+  boltKeepDrop.hitstop = 0;
+  boltKeepDrop.dashBoomReady = true;
+  boltKeepDrop.input.dash = true;
+  update(boltKeepDrop, 0.016);
+  if (boltKeepDrop.boltReady !== true) throw new Error('冲爆 keeps 雷爆');
+  if (boltKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends');
+
+  const boltSatKeep = makeState();
+  resetRoom(boltSatKeep, 0, false);
+  boltSatKeep.splitReady = true;
+  boltSatKeep.player.faceX = 1;
+  boltSatKeep.player.faceY = 0;
+  explode(boltSatKeep, 400, 200, false);
+  boltSatKeep.boltReady = true;
+  boltSatKeep.echoReady = true;
+  boltSatKeep.splitReady = true;
+  boltSatKeep.suckReady = true;
+  boltSatKeep.seed = 1;
+  boltSatKeep.haloReady = true;
+  boltSatKeep.pierceReady = true;
+  boltSatKeep.frostReady = true;
+  boltSatKeep.shoveReady = true;
+  boltSatKeep.baitReady = true;
+  for (let i = 0; i < 10; i++) update(boltSatKeep, 0.05);
+  if (boltSatKeep.boltReady !== true) throw new Error('satellite keeps bolt');
+  if (boltSatKeep.bolts && boltSatKeep.bolts.length) throw new Error('satellite does not arc');
+  if (boltSatKeep.splitReady !== true) throw new Error('satellite keeps split with bolt');
+  if (boltSatKeep.echoReady !== true) throw new Error('satellite keeps echo with bolt');
+  if (boltSatKeep.suckReady !== true) throw new Error('satellite keeps suck with bolt');
+  if (boltSatKeep.seed !== 1) throw new Error('satellite keeps seed with bolt');
+  if (boltSatKeep.haloReady !== true) throw new Error('satellite keeps halo with bolt');
+  if (boltSatKeep.pierceReady !== true) throw new Error('satellite keeps pierce with bolt');
+  if (boltSatKeep.frostReady !== true) throw new Error('satellite keeps frost with bolt');
+  if (boltSatKeep.shoveReady !== true) throw new Error('satellite keeps shove with bolt');
+  if (boltSatKeep.baitReady !== true) throw new Error('satellite keeps bait with bolt');
+
+  const boltEchoKeep = makeState();
+  resetRoom(boltEchoKeep, 0, false);
+  boltEchoKeep.echoReady = true;
+  explode(boltEchoKeep, 400, 200, false);
+  boltEchoKeep.boltReady = true;
+  for (let i = 0; i < 12; i++) update(boltEchoKeep, 0.05);
+  if (boltEchoKeep.boltReady !== true) throw new Error('echo boom keeps bolt');
+  if (boltEchoKeep.bolts && boltEchoKeep.bolts.length) throw new Error('echo boom does not arc');
+
+  const boltForkKeep = makeState();
+  resetRoom(boltForkKeep, 0, false);
+  boltForkKeep.boltReady = true;
+  boltForkKeep.baitReady = true;
+  boltForkKeep.frostReady = true;
+  boltForkKeep.shoveReady = true;
+  boltForkKeep.echoReady = true;
+  boltForkKeep.splitReady = true;
+  explode(boltForkKeep, 200, 200, false, false, false, { fork: true });
+  if (boltForkKeep.boltReady !== true) throw new Error('forked boom keeps bolt');
+  if (boltForkKeep.bolts && boltForkKeep.bolts.length) throw new Error('forked boom does not arc');
+  if (boltForkKeep.baitReady !== true) throw new Error('forked boom keeps bait');
+  if (boltForkKeep.frostReady !== true) throw new Error('forked boom keeps frost');
+  if (boltForkKeep.shoveReady !== true) throw new Error('forked boom keeps shove');
+  if (boltForkKeep.echoReady !== true) throw new Error('forked boom keeps echo');
+  if (boltForkKeep.splitReady !== true) throw new Error('forked boom keeps split');
+
+  const boltPick = makeState();
+  resetRoom(boltPick, 0, false);
+  if (boltPick.boltReady) throw new Error('bolt starts false');
+  boltPick.items.push({ kind: 'bolt', x: boltPick.player.x, y: boltPick.player.y, r: 10, taken: false });
+  update(boltPick, 0.016);
+  if (boltPick.boltReady !== true) throw new Error('pick 雷爆');
+  if (boltPick.toast !== TOAST.boltGet) throw new Error('捡到雷爆 pick');
+
+  const boltTick = makeState();
+  resetRoom(boltTick, 0, false);
+  boltTick.bolts.push({ x0: 0, y0: 0, x1: 10, y1: 10, t: 0.22 });
+  updateBolts(boltTick, 0.22);
+  if (boltTick.bolts.length !== 0) throw new Error('bolts expire');
+
   const yun = makeState();
   resetRoom(yun, 23, false);
   if (yun.roomName !== '晕廊' || yun.roomId !== 'yunlang') throw new Error('yunlang load');
@@ -6818,10 +7148,10 @@ function selfCheck() {
   if (yun.roomName !== '冻廊') throw new Error('core advances to 冻廊');
   const hudYun = makeState();
   resetRoom(hudYun, 23, false);
-  if (roomHudText(hudYun) !== '晕廊 · 24/28') throw new Error('HUD 晕廊 24/28');
+  if (roomHudText(hudYun) !== '晕廊 · 24/29') throw new Error('HUD 晕廊 24/29');
   const hudLie24 = makeState();
   resetRoom(hudLie24, 21, false);
-  if (roomHudText(hudLie24) !== '裂廊 · 22/28') throw new Error('HUD 裂廊 22/28');
+  if (roomHudText(hudLie24) !== '裂廊 · 22/29') throw new Error('HUD 裂廊 22/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
@@ -6961,7 +7291,7 @@ function selfCheck() {
   if (dong.roomName !== '推廊') throw new Error('core advances to 推廊');
   const hudDong = makeState();
   resetRoom(hudDong, 24, false);
-  if (roomHudText(hudDong) !== '冻廊 · 25/28') throw new Error('HUD 冻廊 25/28');
+  if (roomHudText(hudDong) !== '冻廊 · 25/29') throw new Error('HUD 冻廊 25/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
@@ -7116,7 +7446,7 @@ function selfCheck() {
   if (tui.roomName !== '诱廊') throw new Error('core advances to 诱廊');
   const hudTui = makeState();
   resetRoom(hudTui, 25, false);
-  if (roomHudText(hudTui) !== '推廊 · 26/28') throw new Error('HUD 推廊 26/28');
+  if (roomHudText(hudTui) !== '推廊 · 26/29') throw new Error('HUD 推廊 26/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHOVE_V !== 280) throw new Error('SHOVE_V 280');
@@ -7266,7 +7596,7 @@ function selfCheck() {
   if (yin.roomName !== '壳廊') throw new Error('core advances to 壳廊');
   const hudYin = makeState();
   resetRoom(hudYin, 26, false);
-  if (roomHudText(hudYin) !== '诱廊 · 27/28') throw new Error('HUD 诱廊 27/28');
+  if (roomHudText(hudYin) !== '诱廊 · 27/29') throw new Error('HUD 诱廊 27/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
@@ -7380,16 +7710,190 @@ function selfCheck() {
   explode(qiao, qiaoBox.x + qiaoBox.w * 0.5, qiaoBox.y - 20, false);
   if (!qiaoBox.open) throw new Error('壳廊 dry trail should open 心核');
   takeCore(qiao, { x: 100, y: 100 });
-  if (!qiao.won || qiao.toast !== TOAST.all) throw new Error('壳廊 should 通关');
+  if (qiao.won) throw new Error('壳廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(qiao, 0.1);
+  if (qiao.roomName !== '雷廊') throw new Error('core advances to 雷廊');
   const hudQiao = makeState();
   resetRoom(hudQiao, 27, false);
-  if (roomHudText(hudQiao) !== '壳廊 · 28/28') throw new Error('HUD 壳廊 28/28');
+  if (roomHudText(hudQiao) !== '壳廊 · 28/29') throw new Error('HUD 壳廊 28/29');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+
+  const lei = makeState();
+  resetRoom(lei, 28, false);
+  if (lei.roomName !== '雷廊' || lei.roomId !== 'leilang') throw new Error('leilang load');
+  if (lei.toast !== TOAST.boltRoom) throw new Error('雷廊 intro');
+  if (lei.roomW !== 960 || lei.roomH !== 400) throw new Error('雷廊 size');
+  if (lei.player.x !== 80 || lei.player.y !== 200) throw new Error('雷廊 spawn');
+  if (lei.boltReady) throw new Error('雷廊 bolt starts false');
+  if (lei.bolts && lei.bolts.length) throw new Error('雷廊 bolts start empty');
+  let leiStill = 0;
+  let leiTide = 0;
+  for (let i = 0; i < lei.waters.length; i++) {
+    if (lei.waters[i].tide) leiTide += 1;
+    else leiStill += 1;
+  }
+  if (leiStill < 1) throw new Error('雷廊 needs static 水洼');
+  if (leiTide) throw new Error('雷廊 no tide');
+  let leiCore = 0;
+  let leiHeal = 0;
+  let leiThick = 0;
+  let leiBoltItem = 0;
+  let leiBaitItem = 0;
+  let leiShoveItem = 0;
+  let leiFrostItem = 0;
+  let leiHaloItem = 0;
+  let leiPierceItem = 0;
+  let leiSplitItem = 0;
+  let leiDashItem = 0;
+  let leiSuckItem = 0;
+  let leiEchoItem = 0;
+  let leiHasteItem = 0;
+  let leiSeedItem = 0;
+  for (let i = 0; i < lei.crates.length; i++) {
+    if (lei.crates[i].loot === 'core') leiCore += 1;
+    if (lei.crates[i].loot === 'heal') leiHeal += 1;
+    if (lei.crates[i].thick) leiThick += 1;
+  }
+  for (let i = 0; i < lei.items.length; i++) {
+    if (lei.items[i].kind === 'bolt') leiBoltItem += 1;
+    if (lei.items[i].kind === 'bait') leiBaitItem += 1;
+    if (lei.items[i].kind === 'shove') leiShoveItem += 1;
+    if (lei.items[i].kind === 'frost') leiFrostItem += 1;
+    if (lei.items[i].kind === 'halo') leiHaloItem += 1;
+    if (lei.items[i].kind === 'pierce') leiPierceItem += 1;
+    if (lei.items[i].kind === 'split') leiSplitItem += 1;
+    if (lei.items[i].kind === 'dashboom') leiDashItem += 1;
+    if (lei.items[i].kind === 'suck') leiSuckItem += 1;
+    if (lei.items[i].kind === 'echo') leiEchoItem += 1;
+    if (lei.items[i].kind === 'haste') leiHasteItem += 1;
+    if (lei.items[i].kind === 'seed') leiSeedItem += 1;
+  }
+  if (leiBoltItem < 1) throw new Error('雷廊 needs 雷爆');
+  if (leiBaitItem || leiShoveItem || leiFrostItem || leiHaloItem || leiPierceItem || leiSplitItem || leiDashItem || leiSuckItem || leiEchoItem || leiHasteItem || leiSeedItem) {
+    throw new Error('雷廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆/霜爆/推爆/诱爆');
+  }
+  if (leiCore !== 1) throw new Error('雷廊 心核');
+  if (leiHeal < 1) throw new Error('雷廊 回星');
+  const leiBox = lei.crates.find(function (c) { return c.loot === 'core'; });
+  if (!leiBox || leiBox.thick) throw new Error('雷廊 心核 crate is not thick');
+  if (leiThick) throw new Error('雷廊 no thick crate');
+  let leiHound = 0;
+  let leiGuard = 0;
+  let leiMoth = 0;
+  let leiEater = 0;
+  let leiShell = 0;
+  for (let i = 0; i < lei.enemies.length; i++) {
+    if (isHound(lei.enemies[i])) leiHound += 1;
+    else if (isMoth(lei.enemies[i])) leiMoth += 1;
+    else if (isEater(lei.enemies[i])) leiEater += 1;
+    else if (isShell(lei.enemies[i])) leiShell += 1;
+    else leiGuard += 1;
+  }
+  if (leiGuard !== 3 || leiHound !== 0 || leiMoth !== 0 || leiEater !== 0 || leiShell !== 0) {
+    throw new Error('雷廊 烬卫 only');
+  }
+  if (inWater(lei, 80, 200) || inOil(lei, 80, 200)) throw new Error('雷廊 spawn dry');
+  if (inWater(lei, 250, 200) || inOil(lei, 250, 200)) throw new Error('雷廊 雷爆 dry');
+  if (inOil(lei, 860, 188) || inWater(lei, 860, 188)) throw new Error('雷廊 core dry');
+  if (inWater(lei, 400, 200) || inOil(lei, 400, 200)) throw new Error('雷廊 plant dry');
+  if (!inWater(lei, 450, 350)) throw new Error('雷廊 wet bag');
+  if (inWater(lei, 400, 100)) throw new Error('雷廊 north shelf wet');
+  for (let i = 0; i < lei.crates.length; i++) {
+    const c = lei.crates[i];
+    if (circleRect(lei.player.x, lei.player.y, lei.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('雷廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 430; x += 10) {
+    for (let i = 0; i < lei.crates.length; i++) {
+      const c = lei.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('雷廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 480; x += 20) {
+    for (let y = 80; y <= 120; y += 20) {
+      if (inWater(lei, x, y)) throw new Error('雷廊 north puddle');
+      for (let i = 0; i < lei.enemies.length; i++) {
+        const e = lei.enemies[i];
+        if (dist(e.x, e.y, x, y) < e.r + 8) throw new Error('雷廊 north enemy');
+      }
+    }
+  }
+  for (let i = 0; i < lei.enemies.length; i++) {
+    const e = lei.enemies[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= BLAST_R + e.r) throw new Error('BLAST_R at plant does not hit the guards');
+    if (dPlant > BOLT_R) throw new Error('BOLT_R from plant reaches all three');
+    if (dPlant <= 50 || dPlant > 170) throw new Error('plant dist in (50, 170]');
+  }
+  lei.player.x = lei.enemies[0].x;
+  lei.player.y = lei.enemies[0].y;
+  lei.player.hearts = 3;
+  lei.player.inv = 0;
+  lei.player.dashT = 0;
+  lei.hitstop = 0;
+  lei.embers.length = 0;
+  update(lei, 0.016);
+  if (lei.player.hearts >= 3) throw new Error('walking the mid without bolt still bump-hurts');
+  lei.player.x = 80;
+  lei.player.y = 80;
+  lei.player.hearts = 3;
+  lei.player.inv = 0;
+  lei.hitstop = 0;
+  lei.embers.length = 0;
+  const leiGround = lei.items.find(function (it) { return it.kind === 'bolt' && !it.taken; });
+  if (!leiGround) throw new Error('雷廊 ground 雷爆 present');
+  lei.player.x = leiGround.x;
+  lei.player.y = leiGround.y;
+  update(lei, 0.016);
+  if (lei.boltReady !== true) throw new Error('pick bolt → boltReady');
+  if (lei.toast !== TOAST.boltGet) throw new Error('捡到雷爆 room');
+  lei.player.x = 80;
+  lei.player.y = 80;
+  lei.hitstop = 0;
+  lei.embers.length = 0;
+  explode(lei, 400, 200, false);
+  if (lei.boltReady) throw new Error('雷廊 bolt spends');
+  if (lei.toast !== TOAST.boltUse) throw new Error('雷劈了 room');
+  if (!lei.bolts || lei.bolts.length !== 3) throw new Error('雷廊 three arcs');
+  for (let i = 0; i < lei.enemies.length; i++) {
+    if (lei.enemies[i].hp !== ENEMY_HP - 1) throw new Error('雷廊 plant bolt 1 dmg');
+  }
+  lei.boltReady = true;
+  lei.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(lei, 120, 120, false);
+  if (!lei.sparks[lei.sparks.length - 1].wet) throw new Error('雷廊 wet spark');
+  const leiBooms = lei.stats.booms;
+  for (let i = 0; i < 24; i++) update(lei, 0.1);
+  if (lei.boltReady !== true) throw new Error('雷廊 wet fizzle does not consume');
+  if (lei.stats.booms !== leiBooms) throw new Error('雷廊 wet no extra boom');
+  lei.waters = [];
+  explode(lei, 200, 200, false, false, false, { fork: true });
+  if (lei.boltReady !== true) throw new Error('雷廊 fork does not consume');
+  lei.echoReady = true;
+  explode(lei, 200, 200, false);
+  lei.boltReady = true;
+  for (let i = 0; i < 12; i++) update(lei, 0.05);
+  if (lei.boltReady !== true) throw new Error('雷廊 echo does not consume');
+  explode(lei, leiBox.x + leiBox.w * 0.5, leiBox.y - 20, false);
+  if (!leiBox.open) throw new Error('雷廊 dry trail should open 心核');
+  takeCore(lei, { x: 100, y: 100 });
+  if (!lei.won || lei.toast !== TOAST.all) throw new Error('雷廊 should 通关');
+  const hudLei = makeState();
+  resetRoom(hudLei, 28, false);
+  if (roomHudText(hudLei) !== '雷廊 · 29/29') throw new Error('HUD 雷廊 29/29');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (BOLT_R !== 170) throw new Error('BOLT_R 170');
+  if (BOLT_N !== 3) throw new Error('BOLT_N 3');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
