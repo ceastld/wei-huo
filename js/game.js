@@ -18,6 +18,8 @@ const BAIT_R = 11;
 const BAIT_HIT = 16;
 const BOLT_R = 170;
 const BOLT_N = 3;
+const TRIP_R = 16;
+const TRIP_LIFE = 12.0;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -94,6 +96,7 @@ const NAMES = {
   shove: '推爆',
   bait: '诱爆',
   bolt: '雷爆',
+  trip: '绊爆',
   eater: '拾烬',
   shell: '壳卫',
 };
@@ -172,6 +175,11 @@ const TOAST = {
   boltGet: '捡到雷爆',
   boltUse: '雷劈了',
   boltRoom: '雷爆会劈远',
+  tripGet: '捡到绊爆',
+  tripPlant: '绊线埋了',
+  tripPop: '绊住了',
+  tripSelf: '踩到绊线',
+  tripRoom: '埋线等他们来',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -195,6 +203,7 @@ const COL = {
   shove: '#ff5a3a',
   bait: '#ffb020',
   bolt: '#6ec8ff',
+  trip: '#ff6a3d',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -423,6 +432,7 @@ function lootKind(drop) {
   if (drop === '推爆' || drop === 'shove') return 'shove';
   if (drop === '诱爆' || drop === 'bait') return 'bait';
   if (drop === '雷爆' || drop === 'bolt') return 'bolt';
+  if (drop === '绊爆' || drop === 'trip') return 'trip';
   return null;
 }
 
@@ -485,8 +495,10 @@ function makeState() {
     shoveReady: false,
     baitReady: false,
     boltReady: false,
+    tripReady: false,
     baits: [],
     bolts: [],
+    trips: [],
     echoes: [],
     echoing: false,
     splits: [],
@@ -547,6 +559,7 @@ function resetRoom(s, index, keepHearts) {
   s.shoveReady = false;
   s.baitReady = false;
   s.boltReady = false;
+  s.tripReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -561,6 +574,8 @@ function resetRoom(s, index, keepHearts) {
   s.baits.length = 0;
   if (!s.bolts) s.bolts = [];
   s.bolts.length = 0;
+  if (!s.trips) s.trips = [];
+  s.trips.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -665,6 +680,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '诱廊') toast(s, TOAST.baitRoom, 1.4, COL.bait);
   else if (room.name === '壳廊') toast(s, TOAST.shellRoom, 1.4, COL.shell);
   else if (room.name === '雷廊') toast(s, TOAST.boltRoom, 1.4, COL.bolt);
+  else if (room.name === '绊廊') toast(s, TOAST.tripRoom, 1.4, COL.trip);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1108,6 +1124,44 @@ function updateBolts(s, dt) {
   }
 }
 
+function updateTrips(s, dt) {
+  if (!s.trips || !s.trips.length) return;
+  const pops = [];
+  for (let i = s.trips.length - 1; i >= 0; i--) {
+    const tr = s.trips[i];
+    tr.t -= dt;
+    if (tr.t <= 0) {
+      s.trips.splice(i, 1);
+      continue;
+    }
+    let hitEnemy = false;
+    for (let j = 0; j < s.enemies.length; j++) {
+      const e = s.enemies[j];
+      if (e.hp <= 0) continue;
+      if (dist(e.x, e.y, tr.x, tr.y) <= TRIP_R + (e.r || 0)) {
+        hitEnemy = true;
+        break;
+      }
+    }
+    const p = s.player;
+    const skipSelf = (p.inv > 0) || dashIFrame(p);
+    const hitSelf = !hitEnemy && !skipSelf && dist(p.x, p.y, tr.x, tr.y) <= TRIP_R + (p.r || 0);
+    if (hitEnemy || hitSelf) {
+      s.trips.splice(i, 1);
+      pops.push({ x: tr.x, y: tr.y, self: hitSelf });
+    }
+  }
+  for (let i = 0; i < pops.length; i++) {
+    const pop = pops[i];
+    explode(s, pop.x, pop.y, true, true, false, { fork: true });
+    toast(s, pop.self ? TOAST.tripSelf : TOAST.tripPop, 1.1, pop.self ? COL.heart : COL.trip);
+    if (!reducedMotion()) {
+      punch(s, 10);
+      s.hitstop = Math.max(s.hitstop, 0.06);
+    }
+  }
+}
+
 function explode(s, x, y, hot, fused, haste, opts) {
   const echoing = opts === true || (opts && opts.echo) || !!s.echoing;
   const splitting = !!(opts && opts.split) || !!s.splitting;
@@ -1143,6 +1197,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.boltReady) {
     s.boltReady = false;
     bolted = true;
+  }
+  let trippedPlant = false;
+  if (!forked && s.tripReady) {
+    s.tripReady = false;
+    trippedPlant = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -1517,6 +1576,16 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 3, COL.bolt, 80);
     }
   }
+  if (trippedPlant) {
+    if (!s.trips) s.trips = [];
+    s.trips.push({ x: x, y: y, t: TRIP_LIFE });
+    toast(s, TOAST.tripPlant, 1.1, COL.trip);
+    if (!reducedMotion()) {
+      punch(s, 6);
+      s.hitstop = Math.max(s.hitstop, 0.04);
+      burst(s, x, y, 5, COL.trip, 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -1768,6 +1837,7 @@ function watchSteer(s, dt) {
   let shoveIt = null;
   let baitIt = null;
   let boltIt = null;
+  let tripIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -1784,8 +1854,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'shove') shoveIt = it;
     if (it.kind === 'bait') baitIt = it;
     if (it.kind === 'bolt') boltIt = it;
+    if (it.kind === 'trip') tripIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt);
 
   let guard = null;
   let gd = 1e9;
@@ -1871,6 +1942,10 @@ function watchSteer(s, dt) {
   } else if (!s.boltReady && boltIt) {
     tx = boltIt.x - p.x;
     ty = boltIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.tripReady && tripIt) {
+    tx = tripIt.x - p.x;
+    ty = tripIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -2041,6 +2116,7 @@ function update(s, dt) {
     updateEmbers(s, dt, false);
     updateBaits(s, dt);
     updateBolts(s, dt);
+    updateTrips(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
   }
@@ -2052,6 +2128,7 @@ function update(s, dt) {
     updateEmbers(s, dt, false);
     updateBaits(s, dt);
     updateBolts(s, dt);
+    updateTrips(s, dt);
     return;
   }
 
@@ -2155,6 +2232,7 @@ function update(s, dt) {
   updateEmbers(s, dt, true);
   updateBaits(s, dt);
   updateBolts(s, dt);
+  updateTrips(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
@@ -2277,6 +2355,13 @@ function update(s, dt) {
       toast(s, TOAST.boltGet, 1.1, COL.bolt);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.bolt, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'trip') {
+      s.tripReady = true;
+      toast(s, TOAST.tripGet, 1.1, COL.trip);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.trip, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -2790,6 +2875,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.bolt, it.x, it.y - 16);
+    } else if (it.kind === 'trip') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.trip, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.trip;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.trip;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.trip, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -2872,6 +2972,54 @@ function draw(s, ctx) {
       glow(ctx, b.x0, b.y0, 12 * k, COL.bolt, 0.4 * k);
       glow(ctx, b.x1, b.y1, 10 * k, COL.gold, 0.32 * k);
     }
+  }
+
+  for (let i = 0; i < (s.trips || []).length; i++) {
+    const tr = s.trips[i];
+    const fade = tr.t < 1.5 ? clamp(tr.t / 1.5, 0, 1) : 1;
+    const pulse = reducedMotion() ? 1 : 0.88 + 0.16 * (0.5 + 0.5 * Math.sin((s.time || 0) * 5.6));
+    const rad = TRIP_R * pulse;
+    glow(ctx, tr.x, tr.y, rad + 8, COL.trip, reducedMotion() ? 0.28 * fade : 0.18 + 0.22 * fade);
+    ctx.globalAlpha = reducedMotion() ? 0.75 * fade : 0.45 + 0.4 * fade;
+    ctx.strokeStyle = COL.trip;
+    ctx.lineWidth = 1.8 / fit.scale;
+    if (reducedMotion()) {
+      ctx.setLineDash([]);
+    } else {
+      ctx.setLineDash([4 / fit.scale, 3.2 / fit.scale]);
+    }
+    ctx.beginPath();
+    ctx.arc(tr.x, tr.y, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(tr.x - 6, tr.y);
+    ctx.lineTo(tr.x + 6, tr.y);
+    ctx.moveTo(tr.x, tr.y - 6);
+    ctx.lineTo(tr.x, tr.y + 6);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    if (reducedMotion()) {
+      ctx.fillStyle = COL.trip;
+      ctx.beginPath();
+      ctx.arc(tr.x, tr.y, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = COL.trip;
+      ctx.beginPath();
+      ctx.arc(tr.x, tr.y, 3.1 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(tr.x, tr.y, 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = COL.trip;
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = fade;
+    ctx.fillText('绊', tr.x, tr.y - TRIP_R - 5);
+    ctx.globalAlpha = 1;
   }
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3338,6 +3486,27 @@ function draw(s, ctx) {
     ctx.arc(lx, ly, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.tripReady) {
+    let rx;
+    let ry;
+    if (reducedMotion()) {
+      rx = p.x - 12;
+      ry = p.y - 12;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5;
+      rx = p.x + Math.cos(a) * 16;
+      ry = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, rx, ry, 8, COL.trip, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.trip;
+    ctx.arc(rx, ry, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(rx, ry, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -3586,6 +3755,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (shoveEl && s.boltReady && !s.shoveReady) {
     shoveEl.textContent = NAMES.bolt;
   }
+  const tripEl = (typeof document !== 'undefined') ? document.getElementById('trip') : null;
+  if (tripEl) {
+    tripEl.textContent = s.tripReady ? NAMES.trip : '';
+  } else if (boltEl && s.tripReady && !s.boltReady) {
+    boltEl.textContent = NAMES.trip;
+  } else if (baitEl && s.tripReady && !s.baitReady) {
+    baitEl.textContent = NAMES.trip;
+  } else if (shoveEl && s.tripReady && !s.shoveReady) {
+    shoveEl.textContent = NAMES.trip;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -3683,10 +3862,12 @@ function selfCheck() {
   if (BAIT_HIT !== 16) throw new Error('BAIT_HIT 16');
   if (BOLT_R !== 170) throw new Error('BOLT_R 170');
   if (BOLT_N !== 3) throw new Error('BOLT_N 3');
+  if (TRIP_R !== 16) throw new Error('TRIP_R 16');
+  if (TRIP_LIFE !== 12) throw new Error('TRIP_LIFE 12');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 29) throw new Error('need 29 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊'];
+  if (!ROOMS || ROOMS.length !== 30) throw new Error('need 30 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -3734,6 +3915,8 @@ function selfCheck() {
   if (ROOMS[27].name !== '壳廊') throw new Error('room 28 壳廊');
   if (ROOMS[28].id !== 'leilang') throw new Error('雷廊 id');
   if (ROOMS[28].name !== '雷廊') throw new Error('room 29 雷廊');
+  if (ROOMS[29].id !== 'banlang') throw new Error('绊廊 id');
+  if (ROOMS[29].name !== '绊廊') throw new Error('room 30 绊廊');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -3751,7 +3934,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '壳卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '壳卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -3908,10 +4091,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/29') throw new Error('HUD 空场 1/29');
+  if (roomHudText(hud0) !== '空场 · 1/30') throw new Error('HUD 空场 1/30');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/29') throw new Error('HUD 3/29');
+  if (roomHudText(hud2) !== '水巷 · 3/30') throw new Error('HUD 3/30');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -4123,7 +4306,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/29') throw new Error('HUD 灰径 11/29');
+  if (roomHudText(hudAsh) !== '灰径 · 11/30') throw new Error('HUD 灰径 11/30');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -4150,7 +4333,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/29') throw new Error('HUD 环行 12/29');
+  if (roomHudText(hudRing) !== '环行 · 12/30') throw new Error('HUD 环行 12/30');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -4179,7 +4362,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/29') throw new Error('HUD 密线 13/29');
+  if (roomHudText(hudWire) !== '密线 · 13/30') throw new Error('HUD 密线 13/30');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -4495,7 +4678,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/29') throw new Error('HUD 潮廊 14/29');
+  if (roomHudText(hudChao) !== '潮廊 · 14/30') throw new Error('HUD 潮廊 14/30');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -4562,7 +4745,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/29') throw new Error('HUD 种廊 15/29');
+  if (roomHudText(hudZhong) !== '种廊 · 15/30') throw new Error('HUD 种廊 15/30');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -4689,7 +4872,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/29') throw new Error('HUD 油廊 16/29');
+  if (roomHudText(hudYou) !== '油廊 · 16/30') throw new Error('HUD 油廊 16/30');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -4767,7 +4950,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/29') throw new Error('HUD 急廊 17/29');
+  if (roomHudText(hudJi) !== '急廊 · 17/30') throw new Error('HUD 急廊 17/30');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -5110,7 +5293,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/29') throw new Error('HUD 拾廊 18/29');
+  if (roomHudText(hudShi) !== '拾廊 · 18/30') throw new Error('HUD 拾廊 18/30');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -5190,6 +5373,16 @@ function selfCheck() {
   if (TOAST.boltUse !== '雷劈了') throw new Error('雷劈了');
   if (TOAST.boltRoom !== '雷爆会劈远') throw new Error('雷爆会劈远');
   if (lootKind('雷爆') !== 'bolt' || lootKind('bolt') !== 'bolt') throw new Error('lootKind 雷爆');
+  if (NAMES.trip !== '绊爆') throw new Error('绊爆 name');
+  if (COL.trip !== '#ff6a3d') throw new Error('COL.trip');
+  if (TRIP_R !== 16) throw new Error('TRIP_R 16');
+  if (TRIP_LIFE !== 12) throw new Error('TRIP_LIFE 12');
+  if (TOAST.tripGet !== '捡到绊爆') throw new Error('捡到绊爆');
+  if (TOAST.tripPlant !== '绊线埋了') throw new Error('绊线埋了');
+  if (TOAST.tripPop !== '绊住了') throw new Error('绊住了');
+  if (TOAST.tripSelf !== '踩到绊线') throw new Error('踩到绊线');
+  if (TOAST.tripRoom !== '埋线等他们来') throw new Error('埋线等他们来');
+  if (lootKind('绊爆') !== 'trip' || lootKind('trip') !== 'trip') throw new Error('lootKind 绊爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -5368,7 +5561,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/29') throw new Error('HUD 响廊 19/29');
+  if (roomHudText(hudXiang) !== '响廊 · 19/30') throw new Error('HUD 响廊 19/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -5560,7 +5753,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/29') throw new Error('HUD 吸廊 20/29');
+  if (roomHudText(hudXi) !== '吸廊 · 20/30') throw new Error('HUD 吸廊 20/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -5781,7 +5974,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/29') throw new Error('HUD 冲廊 21/29');
+  if (roomHudText(hudChong) !== '冲廊 · 21/30') throw new Error('HUD 冲廊 21/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -6023,7 +6216,7 @@ function selfCheck() {
   if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/29') throw new Error('HUD 裂廊 22/29');
+  if (roomHudText(hudLie) !== '裂廊 · 22/30') throw new Error('HUD 裂廊 22/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -6303,10 +6496,10 @@ function selfCheck() {
   if (guan.roomName !== '晕廊') throw new Error('core advances to 晕廊');
   const hudGuan = makeState();
   resetRoom(hudGuan, 22, false);
-  if (roomHudText(hudGuan) !== '贯廊 · 23/29') throw new Error('HUD 贯廊 23/29');
+  if (roomHudText(hudGuan) !== '贯廊 · 23/30') throw new Error('HUD 贯廊 23/30');
   const hudChong23 = makeState();
   resetRoom(hudChong23, 20, false);
-  if (roomHudText(hudChong23) !== '冲廊 · 21/29') throw new Error('HUD 冲廊 21/29');
+  if (roomHudText(hudChong23) !== '冲廊 · 21/30') throw new Error('HUD 冲廊 21/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
@@ -7029,6 +7222,142 @@ function selfCheck() {
   updateBolts(boltTick, 0.22);
   if (boltTick.bolts.length !== 0) throw new Error('bolts expire');
 
+  const tripOn = makeState();
+  resetRoom(tripOn, 0, false);
+  tripOn.tripReady = true;
+  tripOn.dashBoomReady = true;
+  tripOn.hasteReady = true;
+  explode(tripOn, 400, 200, false);
+  if (tripOn.tripReady !== false) throw new Error('tripReady consumed on boom');
+  if (!tripOn.trips || tripOn.trips.length !== 1) throw new Error('plants one trip');
+  if (tripOn.trips[0].x !== 400 || tripOn.trips[0].y !== 200) throw new Error('trip at boom');
+  if (Math.abs(tripOn.trips[0].t - TRIP_LIFE) > 1e-9) throw new Error('trip t is TRIP_LIFE');
+  if (tripOn.toast !== TOAST.tripPlant) throw new Error('绊线埋了');
+  if (tripOn.dashBoomReady !== true) throw new Error('trip boom keeps 冲爆');
+  if (tripOn.hasteReady !== true) throw new Error('trip boom keeps 急燃');
+
+  const tripWet = makeState();
+  resetRoom(tripWet, 0, false);
+  tripWet.tripReady = true;
+  tripWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(tripWet, 120, 120, false);
+  if (!tripWet.sparks[0].wet) throw new Error('trip wet spark');
+  for (let i = 0; i < 24; i++) update(tripWet, 0.1);
+  if (tripWet.tripReady !== true) throw new Error('wet keeps 绊爆');
+  if (tripWet.stats.booms !== 0) throw new Error('wet trip no boom');
+  if (tripWet.trips && tripWet.trips.length) throw new Error('wet does not plant trip');
+
+  const tripKeepDrop = makeState();
+  resetRoom(tripKeepDrop, 0, false);
+  tripKeepDrop.tripReady = true;
+  dropSpark(tripKeepDrop, 200, 200, false);
+  if (tripKeepDrop.tripReady !== true) throw new Error('dropSpark keeps 绊爆');
+  tripKeepDrop.player.x = 80;
+  tripKeepDrop.player.y = 80;
+  tripKeepDrop.input.dash = true;
+  update(tripKeepDrop, 0.016);
+  if (tripKeepDrop.tripReady !== true) throw new Error('dash keeps 绊爆');
+  tripKeepDrop.player.dashT = 0;
+  tripKeepDrop.player.dashCd = 0;
+  tripKeepDrop.hitstop = 0;
+  tripKeepDrop.dashBoomReady = true;
+  tripKeepDrop.input.dash = true;
+  update(tripKeepDrop, 0.016);
+  if (tripKeepDrop.tripReady !== true) throw new Error('冲爆 keeps 绊爆');
+  if (tripKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends');
+
+  const tripSatKeep = makeState();
+  resetRoom(tripSatKeep, 0, false);
+  tripSatKeep.splitReady = true;
+  tripSatKeep.player.faceX = 1;
+  tripSatKeep.player.faceY = 0;
+  explode(tripSatKeep, 400, 200, false);
+  tripSatKeep.tripReady = true;
+  tripSatKeep.boltReady = true;
+  tripSatKeep.baitReady = true;
+  tripSatKeep.echoReady = true;
+  tripSatKeep.splitReady = true;
+  for (let i = 0; i < 10; i++) update(tripSatKeep, 0.05);
+  if (tripSatKeep.tripReady !== true) throw new Error('satellite keeps trip');
+  if (tripSatKeep.trips && tripSatKeep.trips.length) throw new Error('satellite does not plant trip');
+  if (tripSatKeep.boltReady !== true) throw new Error('satellite keeps bolt with trip');
+  if (tripSatKeep.baitReady !== true) throw new Error('satellite keeps bait with trip');
+
+  const tripEchoKeep = makeState();
+  resetRoom(tripEchoKeep, 0, false);
+  tripEchoKeep.echoReady = true;
+  explode(tripEchoKeep, 400, 200, false);
+  tripEchoKeep.tripReady = true;
+  for (let i = 0; i < 12; i++) update(tripEchoKeep, 0.05);
+  if (tripEchoKeep.tripReady !== true) throw new Error('echo boom keeps trip');
+  if (tripEchoKeep.trips && tripEchoKeep.trips.length) throw new Error('echo boom does not plant trip');
+
+  const tripForkKeep = makeState();
+  resetRoom(tripForkKeep, 0, false);
+  tripForkKeep.tripReady = true;
+  tripForkKeep.boltReady = true;
+  tripForkKeep.baitReady = true;
+  explode(tripForkKeep, 200, 200, false, false, false, { fork: true });
+  if (tripForkKeep.tripReady !== true) throw new Error('forked boom keeps trip');
+  if (tripForkKeep.trips && tripForkKeep.trips.length) throw new Error('forked boom does not plant trip');
+  if (tripForkKeep.boltReady !== true) throw new Error('forked boom keeps bolt with trip');
+  if (tripForkKeep.baitReady !== true) throw new Error('forked boom keeps bait with trip');
+
+  const tripPick = makeState();
+  resetRoom(tripPick, 0, false);
+  if (tripPick.tripReady) throw new Error('trip starts false');
+  tripPick.items.push({ kind: 'trip', x: tripPick.player.x, y: tripPick.player.y, r: 10, taken: false });
+  update(tripPick, 0.016);
+  if (tripPick.tripReady !== true) throw new Error('pick 绊爆');
+  if (tripPick.toast !== TOAST.tripGet) throw new Error('捡到绊爆 pick');
+
+  const tripHit = makeState();
+  resetRoom(tripHit, 0, false);
+  tripHit.trips.push({ x: 400, y: 200, t: TRIP_LIFE });
+  tripHit.enemies.push(testFoe(400, 200));
+  tripHit.tripReady = true;
+  tripHit.boltReady = true;
+  tripHit.baitReady = true;
+  const tripHp = tripHit.enemies[0].hp;
+  const tripBooms = tripHit.stats.booms;
+  updateTrips(tripHit, 0.016);
+  if (tripHit.trips.length !== 0) throw new Error('trip pops on enemy');
+  if (!(tripHit.stats.booms > tripBooms)) throw new Error('trip hot boom');
+  if (tripHit.enemies[0].hp !== tripHp - 2) throw new Error('trip hot boom 2 dmg');
+  if (tripHit.toast !== TOAST.tripPop) throw new Error('绊住了');
+  if (tripHit.tripReady !== true) throw new Error('trip pop keeps tripReady');
+  if (tripHit.boltReady !== true) throw new Error('trip pop keeps bolt');
+  if (tripHit.baitReady !== true) throw new Error('trip pop keeps bait');
+
+  const tripSelf = makeState();
+  resetRoom(tripSelf, 0, false);
+  tripSelf.trips.push({ x: tripSelf.player.x, y: tripSelf.player.y, t: TRIP_LIFE });
+  tripSelf.player.inv = 0;
+  tripSelf.player.dashT = 0;
+  const selfHp = tripSelf.player.hearts;
+  updateTrips(tripSelf, 0.016);
+  if (tripSelf.trips.length !== 0) throw new Error('player trips');
+  if (tripSelf.player.hearts !== selfHp - 1) throw new Error('own trip hurts');
+  if (tripSelf.toast !== TOAST.tripSelf) throw new Error('踩到绊线');
+
+  const tripDashSkip = makeState();
+  resetRoom(tripDashSkip, 0, false);
+  tripDashSkip.trips.push({ x: tripDashSkip.player.x, y: tripDashSkip.player.y, t: TRIP_LIFE });
+  tripDashSkip.player.inv = 0;
+  tripDashSkip.player.dashT = DASH_TIME;
+  const dashSkipBooms = tripDashSkip.stats.booms;
+  updateTrips(tripDashSkip, 0.016);
+  if (tripDashSkip.trips.length !== 1) throw new Error('dash i-frame skips trip');
+  if (tripDashSkip.stats.booms !== dashSkipBooms) throw new Error('dash i-frame no trip boom');
+
+  const tripExp = makeState();
+  resetRoom(tripExp, 0, false);
+  tripExp.trips.push({ x: 200, y: 200, t: 0.01 });
+  const expBooms = tripExp.stats.booms;
+  updateTrips(tripExp, 0.02);
+  if (tripExp.trips.length !== 0) throw new Error('trip expires');
+  if (tripExp.stats.booms !== expBooms) throw new Error('expire no boom');
+
   const yun = makeState();
   resetRoom(yun, 23, false);
   if (yun.roomName !== '晕廊' || yun.roomId !== 'yunlang') throw new Error('yunlang load');
@@ -7148,10 +7477,10 @@ function selfCheck() {
   if (yun.roomName !== '冻廊') throw new Error('core advances to 冻廊');
   const hudYun = makeState();
   resetRoom(hudYun, 23, false);
-  if (roomHudText(hudYun) !== '晕廊 · 24/29') throw new Error('HUD 晕廊 24/29');
+  if (roomHudText(hudYun) !== '晕廊 · 24/30') throw new Error('HUD 晕廊 24/30');
   const hudLie24 = makeState();
   resetRoom(hudLie24, 21, false);
-  if (roomHudText(hudLie24) !== '裂廊 · 22/29') throw new Error('HUD 裂廊 22/29');
+  if (roomHudText(hudLie24) !== '裂廊 · 22/30') throw new Error('HUD 裂廊 22/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
@@ -7291,7 +7620,7 @@ function selfCheck() {
   if (dong.roomName !== '推廊') throw new Error('core advances to 推廊');
   const hudDong = makeState();
   resetRoom(hudDong, 24, false);
-  if (roomHudText(hudDong) !== '冻廊 · 25/29') throw new Error('HUD 冻廊 25/29');
+  if (roomHudText(hudDong) !== '冻廊 · 25/30') throw new Error('HUD 冻廊 25/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
@@ -7446,7 +7775,7 @@ function selfCheck() {
   if (tui.roomName !== '诱廊') throw new Error('core advances to 诱廊');
   const hudTui = makeState();
   resetRoom(hudTui, 25, false);
-  if (roomHudText(hudTui) !== '推廊 · 26/29') throw new Error('HUD 推廊 26/29');
+  if (roomHudText(hudTui) !== '推廊 · 26/30') throw new Error('HUD 推廊 26/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHOVE_V !== 280) throw new Error('SHOVE_V 280');
@@ -7596,7 +7925,7 @@ function selfCheck() {
   if (yin.roomName !== '壳廊') throw new Error('core advances to 壳廊');
   const hudYin = makeState();
   resetRoom(hudYin, 26, false);
-  if (roomHudText(hudYin) !== '诱廊 · 27/29') throw new Error('HUD 诱廊 27/29');
+  if (roomHudText(hudYin) !== '诱廊 · 27/30') throw new Error('HUD 诱廊 27/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
@@ -7715,7 +8044,7 @@ function selfCheck() {
   if (qiao.roomName !== '雷廊') throw new Error('core advances to 雷廊');
   const hudQiao = makeState();
   resetRoom(hudQiao, 27, false);
-  if (roomHudText(hudQiao) !== '壳廊 · 28/29') throw new Error('HUD 壳廊 28/29');
+  if (roomHudText(hudQiao) !== '壳廊 · 28/30') throw new Error('HUD 壳廊 28/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
@@ -7885,14 +8214,202 @@ function selfCheck() {
   explode(lei, leiBox.x + leiBox.w * 0.5, leiBox.y - 20, false);
   if (!leiBox.open) throw new Error('雷廊 dry trail should open 心核');
   takeCore(lei, { x: 100, y: 100 });
-  if (!lei.won || lei.toast !== TOAST.all) throw new Error('雷廊 should 通关');
+  if (lei.won) throw new Error('雷廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(lei, 0.1);
+  if (lei.roomName !== '绊廊') throw new Error('core advances to 绊廊');
   const hudLei = makeState();
   resetRoom(hudLei, 28, false);
-  if (roomHudText(hudLei) !== '雷廊 · 29/29') throw new Error('HUD 雷廊 29/29');
+  if (roomHudText(hudLei) !== '雷廊 · 29/30') throw new Error('HUD 雷廊 29/30');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BOLT_R !== 170) throw new Error('BOLT_R 170');
   if (BOLT_N !== 3) throw new Error('BOLT_N 3');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+
+  const ban = makeState();
+  resetRoom(ban, 29, false);
+  if (ban.roomName !== '绊廊' || ban.roomId !== 'banlang') throw new Error('banlang load');
+  if (ban.toast !== TOAST.tripRoom) throw new Error('绊廊 intro');
+  if (ban.roomW !== 960 || ban.roomH !== 400) throw new Error('绊廊 size');
+  if (ban.player.x !== 80 || ban.player.y !== 200) throw new Error('绊廊 spawn');
+  if (ban.tripReady) throw new Error('绊廊 trip starts false');
+  if (ban.trips && ban.trips.length) throw new Error('绊廊 trips start empty');
+  let banStill = 0;
+  let banTide = 0;
+  for (let i = 0; i < ban.waters.length; i++) {
+    if (ban.waters[i].tide) banTide += 1;
+    else banStill += 1;
+  }
+  if (banStill < 1) throw new Error('绊廊 needs static 水洼');
+  if (banTide) throw new Error('绊廊 no tide');
+  let banCore = 0;
+  let banHeal = 0;
+  let banThick = 0;
+  let banTripItem = 0;
+  let banBoltItem = 0;
+  let banBaitItem = 0;
+  let banShoveItem = 0;
+  let banFrostItem = 0;
+  let banHaloItem = 0;
+  let banPierceItem = 0;
+  let banSplitItem = 0;
+  let banDashItem = 0;
+  let banSuckItem = 0;
+  let banEchoItem = 0;
+  let banHasteItem = 0;
+  let banSeedItem = 0;
+  for (let i = 0; i < ban.crates.length; i++) {
+    if (ban.crates[i].loot === 'core') banCore += 1;
+    if (ban.crates[i].loot === 'heal') banHeal += 1;
+    if (ban.crates[i].thick) banThick += 1;
+  }
+  for (let i = 0; i < ban.items.length; i++) {
+    if (ban.items[i].kind === 'trip') banTripItem += 1;
+    if (ban.items[i].kind === 'bolt') banBoltItem += 1;
+    if (ban.items[i].kind === 'bait') banBaitItem += 1;
+    if (ban.items[i].kind === 'shove') banShoveItem += 1;
+    if (ban.items[i].kind === 'frost') banFrostItem += 1;
+    if (ban.items[i].kind === 'halo') banHaloItem += 1;
+    if (ban.items[i].kind === 'pierce') banPierceItem += 1;
+    if (ban.items[i].kind === 'split') banSplitItem += 1;
+    if (ban.items[i].kind === 'dashboom') banDashItem += 1;
+    if (ban.items[i].kind === 'suck') banSuckItem += 1;
+    if (ban.items[i].kind === 'echo') banEchoItem += 1;
+    if (ban.items[i].kind === 'haste') banHasteItem += 1;
+    if (ban.items[i].kind === 'seed') banSeedItem += 1;
+  }
+  if (banTripItem < 1) throw new Error('绊廊 needs 绊爆');
+  if (banBoltItem || banBaitItem || banShoveItem || banFrostItem || banHaloItem || banPierceItem || banSplitItem || banDashItem || banSuckItem || banEchoItem || banHasteItem || banSeedItem) {
+    throw new Error('绊廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆/霜爆/推爆/诱爆/雷爆');
+  }
+  if (banCore !== 1) throw new Error('绊廊 心核');
+  if (banHeal < 1) throw new Error('绊廊 回星');
+  const banBox = ban.crates.find(function (c) { return c.loot === 'core'; });
+  if (!banBox || banBox.thick) throw new Error('绊廊 心核 crate is not thick');
+  if (banThick) throw new Error('绊廊 no thick crate');
+  let banHound = 0;
+  let banGuard = 0;
+  let banMoth = 0;
+  let banEater = 0;
+  let banShell = 0;
+  for (let i = 0; i < ban.enemies.length; i++) {
+    if (isHound(ban.enemies[i])) banHound += 1;
+    else if (isMoth(ban.enemies[i])) banMoth += 1;
+    else if (isEater(ban.enemies[i])) banEater += 1;
+    else if (isShell(ban.enemies[i])) banShell += 1;
+    else banGuard += 1;
+  }
+  if (banGuard !== 3 || banHound !== 0 || banMoth !== 0 || banEater !== 0 || banShell !== 0) {
+    throw new Error('绊廊 烬卫 only');
+  }
+  if (inWater(ban, 80, 200) || inOil(ban, 80, 200)) throw new Error('绊廊 spawn dry');
+  if (inWater(ban, 240, 200) || inOil(ban, 240, 200)) throw new Error('绊廊 绊爆 dry');
+  if (inOil(ban, 860, 188) || inWater(ban, 860, 188)) throw new Error('绊廊 core dry');
+  if (inWater(ban, 420, 200) || inOil(ban, 420, 200)) throw new Error('绊廊 plant dry');
+  if (!inWater(ban, 350, 350)) throw new Error('绊廊 wet bag');
+  if (inWater(ban, 400, 100)) throw new Error('绊廊 north shelf wet');
+  for (let i = 0; i < ban.crates.length; i++) {
+    const c = ban.crates[i];
+    if (circleRect(ban.player.x, ban.player.y, ban.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('绊廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 450; x += 10) {
+    for (let i = 0; i < ban.crates.length; i++) {
+      const c = ban.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('绊廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 480; x += 20) {
+    for (let y = 80; y <= 120; y += 20) {
+      if (inWater(ban, x, y)) throw new Error('绊廊 north puddle');
+      for (let i = 0; i < ban.enemies.length; i++) {
+        const e = ban.enemies[i];
+        if (dist(e.x, e.y, x, y) < e.r + 8) throw new Error('绊廊 north enemy');
+      }
+    }
+  }
+  let banEast = null;
+  for (let i = 0; i < ban.enemies.length; i++) {
+    const e = ban.enemies[i];
+    if (dist(e.x, e.y, 80, 200) < 80) throw new Error('绊廊 foe too close to spawn');
+    const dPlant = dist(e.x, e.y, 420, 200);
+    if (Math.abs(e.y - 200) < 1 && e.x > 420 && dPlant < 140) banEast = e;
+  }
+  if (!banEast) throw new Error('绊廊 east 烬卫 on plant path');
+  if (Math.abs(dist(banEast.x, banEast.y, 420, 200) - 100) > 8) throw new Error('plant dist ~100');
+  ban.player.x = ban.enemies[0].x;
+  ban.player.y = ban.enemies[0].y;
+  ban.player.hearts = 3;
+  ban.player.inv = 0;
+  ban.player.dashT = 0;
+  ban.hitstop = 0;
+  ban.embers.length = 0;
+  update(ban, 0.016);
+  if (ban.player.hearts >= 3) throw new Error('walking the mid without trip still bump-hurts');
+  ban.player.x = 80;
+  ban.player.y = 80;
+  ban.player.hearts = 3;
+  ban.player.inv = 0;
+  ban.hitstop = 0;
+  ban.embers.length = 0;
+  const banGround = ban.items.find(function (it) { return it.kind === 'trip' && !it.taken; });
+  if (!banGround) throw new Error('绊廊 ground 绊爆 present');
+  ban.player.x = banGround.x;
+  ban.player.y = banGround.y;
+  update(ban, 0.016);
+  if (ban.tripReady !== true) throw new Error('pick trip → tripReady');
+  if (ban.toast !== TOAST.tripGet) throw new Error('捡到绊爆 room');
+  ban.player.x = 80;
+  ban.player.y = 80;
+  ban.hitstop = 0;
+  ban.embers.length = 0;
+  explode(ban, 420, 200, false);
+  if (ban.tripReady) throw new Error('绊廊 trip spends');
+  if (!ban.trips || ban.trips.length !== 1) throw new Error('绊廊 plants one trip');
+  if (ban.trips[0].x !== 420 || ban.trips[0].y !== 200) throw new Error('绊廊 trip at plant');
+  if (ban.toast !== TOAST.tripPlant) throw new Error('绊线埋了 room');
+  for (let i = 0; i < ban.enemies.length; i++) {
+    ban.enemies[i].x = 900;
+    ban.enemies[i].y = 40;
+  }
+  ban.tripReady = true;
+  ban.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(ban, 120, 120, false);
+  if (!ban.sparks[ban.sparks.length - 1].wet) throw new Error('绊廊 wet spark');
+  const banBooms = ban.stats.booms;
+  for (let i = 0; i < 24; i++) update(ban, 0.1);
+  if (ban.tripReady !== true) throw new Error('绊廊 wet fizzle does not consume');
+  if (ban.stats.booms !== banBooms) throw new Error('绊廊 wet no extra boom');
+  ban.waters = [];
+  explode(ban, 200, 200, false, false, false, { fork: true });
+  if (ban.tripReady !== true) throw new Error('绊廊 fork does not consume');
+  ban.echoReady = true;
+  explode(ban, 200, 200, false);
+  ban.tripReady = true;
+  for (let i = 0; i < 12; i++) update(ban, 0.05);
+  if (ban.tripReady !== true) throw new Error('绊廊 echo does not consume');
+  ban.trips = [{ x: 420, y: 200, t: TRIP_LIFE }];
+  ban.enemies[0].x = 420;
+  ban.enemies[0].y = 200;
+  ban.enemies[0].hp = ENEMY_HP;
+  ban.hitstop = 0;
+  updateTrips(ban, 0.016);
+  if (ban.trips.length !== 0) throw new Error('绊廊 enemy trips');
+  if (ban.toast !== TOAST.tripPop) throw new Error('绊住了 room');
+  explode(ban, banBox.x + banBox.w * 0.5, banBox.y - 20, false);
+  if (!banBox.open) throw new Error('绊廊 dry trail should open 心核');
+  takeCore(ban, { x: 100, y: 100 });
+  if (!ban.won || ban.toast !== TOAST.all) throw new Error('绊廊 should 通关');
+  const hudBan = makeState();
+  resetRoom(hudBan, 29, false);
+  if (roomHudText(hudBan) !== '绊廊 · 30/30') throw new Error('HUD 绊廊 30/30');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (TRIP_R !== 16) throw new Error('TRIP_R 16');
+  if (TRIP_LIFE !== 12) throw new Error('TRIP_LIFE 12');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
 
   console.log('selfCheck ok', {
