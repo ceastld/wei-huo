@@ -192,7 +192,8 @@ html, body {
 }
 
 #combo,
-#seed {
+#seed,
+#haste {
   display: block;
   margin-top: 4px;
   min-height: 1em;
@@ -201,6 +202,11 @@ html, body {
   letter-spacing: 0.18em;
   color: var(--gold);
   text-shadow: 0 0 12px rgba(255, 210, 74, 0.45);
+}
+
+#haste {
+  color: var(--haste);
+  text-shadow: 0 0 12px rgba(255, 154, 60, 0.45);
 }
 
 #watchBtn {
