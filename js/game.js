@@ -37,6 +37,11 @@ const FAN_N = 3;
 const FAN_D = 96;
 const FAN_A = Math.PI / 6;
 const FAN_DT = 0.12;
+const DRUM_R = 150;
+const DRUM_V = 320;
+const DRUM_W = 20;
+const DRUM_DMG = 2;
+const DRUM_KB = 220;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -125,6 +130,7 @@ const NAMES = {
   pool: '洼爆',
   poolPad: '临洼',
   fan: '扇爆',
+  drum: '鼓爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -235,6 +241,9 @@ const TOAST = {
   fanGet: '捡到扇爆',
   fanUse: '扇出去了',
   fanRoom: '扇过去清场',
+  drumGet: '捡到鼓爆',
+  drumUse: '鼓开了',
+  drumRoom: '鼓过去清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -270,6 +279,7 @@ const COL = {
   spin: '#ff9a4a',
   pool: '#4ec4ff',
   fan: '#ff7a54',
+  drum: '#ffd24a',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -523,6 +533,7 @@ function lootKind(drop) {
   if (drop === '旋爆' || drop === 'spin') return 'spin';
   if (drop === '洼爆' || drop === 'pool') return 'pool';
   if (drop === '扇爆' || drop === 'fan') return 'fan';
+  if (drop === '鼓爆' || drop === 'drum') return 'drum';
   return null;
 }
 
@@ -593,6 +604,7 @@ function makeState() {
     spinReady: false,
     poolReady: false,
     fanReady: false,
+    drumReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -602,6 +614,7 @@ function makeState() {
     mirrors: [],
     spins: [],
     fans: [],
+    drums: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -722,6 +735,7 @@ function resetRoom(s, index, keepHearts) {
   s.spinReady = false;
   s.poolReady = false;
   s.fanReady = false;
+  s.drumReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -750,6 +764,8 @@ function resetRoom(s, index, keepHearts) {
   s.spins.length = 0;
   if (!s.fans) s.fans = [];
   s.fans.length = 0;
+  if (!s.drums) s.drums = [];
+  s.drums.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -867,6 +883,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '爆廊') toast(s, TOAST.boomerRoom, 1.4, COL.boomer);
   else if (room.name === '洼廊') toast(s, TOAST.poolRoom, 1.4, COL.pool);
   else if (room.name === '扇廊') toast(s, TOAST.fanRoom, 1.4, COL.fan);
+  else if (room.name === '鼓廊') toast(s, TOAST.drumRoom, 1.4, COL.drum);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1495,6 +1512,61 @@ function updateFans(s, dt) {
   }
 }
 
+function drumHurtEnemy(s, e, ox, oy) {
+  if (!e || e.hp <= 0) return;
+  if (isShell(e)) {
+    e.hp -= 1;
+    if (!reducedMotion()) {
+      burst(s, e.x, e.y, 4, COL.shell, 90);
+      burst(s, e.x, e.y, 4, COL.gold, 90);
+    }
+  } else {
+    e.hp -= (isHound(e) || isMoth(e) || isEater(e)) ? 1 : DRUM_DMG;
+  }
+  e.hitT = 0.18;
+  const ang = Math.atan2(e.y - oy, e.x - ox) || 0;
+  e.shoveVx = Math.cos(ang) * DRUM_KB;
+  e.shoveVy = Math.sin(ang) * DRUM_KB;
+  e.shoveT = SHOVE_T;
+  if (!reducedMotion()) {
+    burst(s, e.x, e.y, 6, COL.drum, 170);
+    burst(s, e.x, e.y, 4, COL.gold, 160);
+    punch(s, 4);
+    s.hitstop = Math.max(s.hitstop, 0.05);
+  }
+  if (e.hp <= 0) foeDown(s, e);
+}
+
+function updateDrums(s, dt) {
+  if (!s.drums || !s.drums.length) return;
+  for (let i = s.drums.length - 1; i >= 0; i--) {
+    const d = s.drums[i];
+    if (!d.hit) d.hit = Object.create(null);
+    d.r += DRUM_V * dt;
+    const band = DRUM_W * 0.5;
+    for (let j = 0; j < s.enemies.length; j++) {
+      const e = s.enemies[j];
+      if (e.hp <= 0) continue;
+      const key = String(e.id != null ? e.id : s.enemies.indexOf(e));
+      if (d.hit[key]) continue;
+      const ed = Math.hypot(e.x - d.x, e.y - d.y);
+      if (Math.abs(ed - d.r) <= band + (e.r || ENEMY_R)) {
+        d.hit[key] = 1;
+        drumHurtEnemy(s, e, d.x, d.y);
+      }
+    }
+    const p = s.player;
+    if (p && !d.hitPlayer) {
+      const pd = Math.hypot(p.x - d.x, p.y - d.y);
+      if (Math.abs(pd - d.r) <= band + (p.r || PLAYER_R)) {
+        d.hitPlayer = 1;
+        if (!s.won && !s.dead) hurtPlayer(s, d.x, d.y, 'blast');
+      }
+    }
+    if (d.r >= DRUM_R) s.drums.splice(i, 1);
+  }
+}
+
 function updateDelays(s, dt) {
   if (!s.delays || !s.delays.length) return;
   const pops = [];
@@ -1607,6 +1679,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.fanReady) {
     s.fanReady = false;
     fanning = true;
+  }
+  let drumming = false;
+  if (!forked && s.drumReady) {
+    s.drumReady = false;
+    drumming = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2118,6 +2195,17 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 160);
     }
   }
+  if (drumming) {
+    if (!s.drums) s.drums = [];
+    s.drums.push({ x: x, y: y, r: BLAST_R, hit: Object.create(null) });
+    toast(s, TOAST.drumUse, 1.1, COL.drum);
+    burst(s, x, y, 6, COL.gold, 170);
+    burst(s, x, y, 4, COL.haste, 160);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2388,6 +2476,7 @@ function watchSteer(s, dt) {
   let spinIt = null;
   let poolIt = null;
   let fanIt = null;
+  let drumIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2412,8 +2501,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'spin') spinIt = it;
     if (it.kind === 'pool') poolIt = it;
     if (it.kind === 'fan') fanIt = it;
+    if (it.kind === 'drum') drumIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt);
 
   let guard = null;
   let gd = 1e9;
@@ -2531,6 +2621,10 @@ function watchSteer(s, dt) {
   } else if (!s.fanReady && fanIt) {
     tx = fanIt.x - p.x;
     ty = fanIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.drumReady && drumIt) {
+    tx = drumIt.x - p.x;
+    ty = drumIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -2709,6 +2803,7 @@ function update(s, dt) {
     updateMirrors(s, dt);
     updateSpins(s, dt);
     updateFans(s, dt);
+    updateDrums(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -2728,6 +2823,7 @@ function update(s, dt) {
     updateMirrors(s, dt);
     updateSpins(s, dt);
     updateFans(s, dt);
+    updateDrums(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -2839,6 +2935,7 @@ function update(s, dt) {
   updateMirrors(s, dt);
   updateSpins(s, dt);
   updateFans(s, dt);
+  updateDrums(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3019,6 +3116,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.fan, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'drum') {
+      s.drumReady = true;
+      toast(s, TOAST.drumGet, 1.1, COL.drum);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.gold, 130);
+      burst(s, it.x, it.y, 4, COL.haste, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -3670,6 +3774,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.fan, it.x, it.y - 16);
+    } else if (it.kind === 'drum') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.drum, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.drum;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.haste;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.drum;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.drum, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -4022,6 +4141,37 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('扇', p.x, p.y - 12);
+    }
+  }
+
+  if (s.drums && s.drums.length) {
+    for (let i = 0; i < s.drums.length; i++) {
+      const d = s.drums[i];
+      const rad = Math.max(2, d.r || 0);
+      if (!reducedMotion()) glow(ctx, d.x, d.y, rad + DRUM_W, COL.drum, 0.22);
+      ctx.strokeStyle = COL.drum;
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = Math.max(1.6, DRUM_W * 0.45) / fit.scale;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.28;
+      ctx.lineWidth = (DRUM_W * 0.9) / fit.scale;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, rad, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      if (!reducedMotion()) {
+        for (let k = 0; k < 8; k++) {
+          const a = (Math.PI * 2 * k) / 8 + (s.time || 0) * 0.6;
+          const px = d.x + Math.cos(a) * rad;
+          const py = d.y + Math.sin(a) * rad;
+          ctx.fillStyle = k % 2 ? COL.gold : COL.haste;
+          ctx.beginPath();
+          ctx.arc(px, py, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
   }
 
@@ -4737,6 +4887,27 @@ function draw(s, ctx) {
     ctx.arc(fx, fy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.drumReady) {
+    let dx;
+    let dy;
+    if (reducedMotion()) {
+      dx = p.x - 4;
+      dy = p.y + 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4;
+      dx = p.x + Math.cos(a) * 16;
+      dy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, dx, dy, 8, COL.drum, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.drum;
+    ctx.arc(dx, dy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.haste;
+    ctx.arc(dx, dy, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -5075,6 +5246,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (rollEl && s.fanReady && !s.rollReady) {
     rollEl.textContent = NAMES.fan;
   }
+  const drumEl = (typeof document !== 'undefined') ? document.getElementById('drum') : null;
+  if (drumEl) {
+    drumEl.textContent = s.drumReady ? NAMES.drum : '';
+  } else if (fanEl && s.drumReady && !s.fanReady) {
+    fanEl.textContent = NAMES.drum;
+  } else if (poolEl && s.drumReady && !s.poolReady) {
+    poolEl.textContent = NAMES.drum;
+  } else if (spinEl && s.drumReady && !s.spinReady) {
+    spinEl.textContent = NAMES.drum;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -5194,10 +5375,15 @@ function selfCheck() {
   if (FAN_D !== 96) throw new Error('FAN_D 96');
   if (Math.abs(FAN_A - Math.PI / 6) >= 1e-6) throw new Error('FAN_A pi/6');
   if (FAN_DT !== 0.12) throw new Error('FAN_DT 0.12');
+  if (DRUM_R !== 150) throw new Error('DRUM_R 150');
+  if (DRUM_V !== 320) throw new Error('DRUM_V 320');
+  if (DRUM_W !== 20) throw new Error('DRUM_W 20');
+  if (DRUM_DMG !== 2) throw new Error('DRUM_DMG 2');
+  if (DRUM_KB !== 220) throw new Error('DRUM_KB 220');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 38) throw new Error('need 38 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊'];
+  if (!ROOMS || ROOMS.length !== 39) throw new Error('need 39 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -5263,6 +5449,8 @@ function selfCheck() {
   if (ROOMS[36].name !== '洼廊') throw new Error('room 37 洼廊');
   if (ROOMS[37].id !== 'shanlang') throw new Error('扇廊 id');
   if (ROOMS[37].name !== '扇廊') throw new Error('room 38 扇廊');
+  if (ROOMS[38].id !== 'gulang') throw new Error('鼓廊 id');
+  if (ROOMS[38].name !== '鼓廊') throw new Error('room 39 鼓廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -5282,6 +5470,9 @@ function selfCheck() {
   if (NAMES.fan !== '扇爆') throw new Error('NAMES.fan');
   if (COL.fan !== '#ff7a54') throw new Error('COL.fan');
   if (lootKind('扇爆') !== 'fan' || lootKind('fan') !== 'fan') throw new Error('lootKind 扇爆');
+  if (NAMES.drum !== '鼓爆') throw new Error('NAMES.drum');
+  if (COL.drum !== '#ffd24a') throw new Error('COL.drum');
+  if (lootKind('鼓爆') !== 'drum' || lootKind('drum') !== 'drum') throw new Error('lootKind 鼓爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -5304,7 +5495,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -6834,6 +7025,7 @@ function selfCheck() {
   if (lootKind('旋爆') !== 'spin' || lootKind('spin') !== 'spin') throw new Error('lootKind 旋爆');
   if (lootKind('洼爆') !== 'pool' || lootKind('pool') !== 'pool') throw new Error('lootKind 洼爆');
   if (lootKind('扇爆') !== 'fan' || lootKind('fan') !== 'fan') throw new Error('lootKind 扇爆');
+  if (lootKind('鼓爆') !== 'drum' || lootKind('drum') !== 'drum') throw new Error('lootKind 鼓爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -11872,10 +12064,6 @@ function selfCheck() {
     if (wa.won) throw new Error('洼廊 not last');
     if (wa.toast !== TOAST.core) throw new Error('洼廊 心核到手');
   }
-  const lastWin = makeState();
-  resetRoom(lastWin, ROOMS.length - 1, false);
-  takeCore(lastWin, { x: 100, y: 100 });
-  if (!lastWin.won || lastWin.toast !== TOAST.all) throw new Error('last room 通关');
   const hudWa = makeState();
   resetRoom(hudWa, 36, false);
   if (roomHudText(hudWa).indexOf('洼廊 · 37/') !== 0) throw new Error('HUD 洼廊 37/n');
@@ -11889,6 +12077,249 @@ function selfCheck() {
   if (TOAST.poolUse !== '洼开了') throw new Error('洼开了 toast');
   if (TOAST.poolDry !== '洼干了') throw new Error('洼干了 toast');
   if (TOAST.poolRoom !== '炸出一洼') throw new Error('炸出一洼');
+
+  const shan = makeState();
+  resetRoom(shan, 37, false);
+  if (shan.roomName !== '扇廊' || shan.roomId !== 'shanlang') throw new Error('shanlang load');
+  takeCore(shan, { x: 100, y: 100 });
+  if (shan.won) throw new Error('扇廊 should not 通关');
+  if (shan.toast !== TOAST.core) throw new Error('扇廊 过关');
+  for (let i = 0; i < 20; i++) update(shan, 0.1);
+  if (shan.roomName !== '鼓廊') throw new Error('core advances to 鼓廊');
+  const hudShan = makeState();
+  resetRoom(hudShan, 37, false);
+  if (roomHudText(hudShan).indexOf('扇廊 · 38/') !== 0) throw new Error('HUD 扇廊 38/n');
+
+  const gu = makeState();
+  resetRoom(gu, 38, false);
+  if (gu.roomName !== '鼓廊' || gu.roomId !== 'gulang') throw new Error('gulang load');
+  if (gu.toast !== TOAST.drumRoom) throw new Error('鼓廊 intro');
+  if (gu.roomW !== 960 || gu.roomH !== 400) throw new Error('鼓廊 size');
+  if (gu.player.x !== 80 || gu.player.y !== 200) throw new Error('鼓廊 spawn');
+  if (gu.drumReady) throw new Error('鼓廊 drum starts false');
+  if (!gu.drums || gu.drums.length) throw new Error('鼓廊 drums start empty');
+  let guStill = 0;
+  let guTide = 0;
+  for (let i = 0; i < gu.waters.length; i++) {
+    if (gu.waters[i].tide) guTide += 1;
+    else guStill += 1;
+  }
+  if (guStill < 1) throw new Error('鼓廊 needs static 水洼');
+  if (guTide) throw new Error('鼓廊 no tide');
+  let guCore = 0;
+  let guHeal = 0;
+  let guThick = 0;
+  let guDrumItem = 0;
+  let guFanItem = 0;
+  for (let i = 0; i < gu.crates.length; i++) {
+    if (gu.crates[i].loot === 'core') guCore += 1;
+    if (gu.crates[i].loot === 'heal') guHeal += 1;
+    if (gu.crates[i].thick) guThick += 1;
+  }
+  for (let i = 0; i < gu.items.length; i++) {
+    if (gu.items[i].kind === 'drum') guDrumItem += 1;
+    if (gu.items[i].kind === 'fan') guFanItem += 1;
+  }
+  if (guDrumItem < 1) throw new Error('鼓廊 needs 鼓爆');
+  if (guFanItem) throw new Error('鼓廊 no extra pickup');
+  if (guCore !== 1) throw new Error('鼓廊 心核');
+  if (guHeal < 1) throw new Error('鼓廊 回星');
+  const guBox = gu.crates.find(function (c) { return c.loot === 'core'; });
+  if (!guBox || guBox.thick) throw new Error('鼓廊 心核 crate is not thick');
+  if (guThick) throw new Error('鼓廊 no thick crate');
+  let guHound = 0;
+  let guGuard = 0;
+  let guMoth = 0;
+  let guEater = 0;
+  let guShell = 0;
+  let guBoomer = 0;
+  for (let i = 0; i < gu.enemies.length; i++) {
+    if (isHound(gu.enemies[i])) guHound += 1;
+    else if (isMoth(gu.enemies[i])) guMoth += 1;
+    else if (isEater(gu.enemies[i])) guEater += 1;
+    else if (isShell(gu.enemies[i])) guShell += 1;
+    else if (isBoomer(gu.enemies[i])) guBoomer += 1;
+    else guGuard += 1;
+  }
+  if (guGuard !== 3 || guHound !== 0 || guMoth !== 0 || guEater !== 0 || guShell !== 0 || guBoomer !== 0) {
+    throw new Error('鼓廊 烬卫 only');
+  }
+  if (inWater(gu, 80, 200) || inOil(gu, 80, 200)) throw new Error('鼓廊 spawn dry');
+  if (inWater(gu, 240, 200) || inOil(gu, 240, 200)) throw new Error('鼓廊 鼓爆 dry');
+  if (inWater(gu, 400, 200) || inOil(gu, 400, 200)) throw new Error('鼓廊 plant dry');
+  if (inOil(gu, 860, 188) || inWater(gu, 860, 188)) throw new Error('鼓廊 core dry');
+  if (inWater(gu, 490, 140) || inOil(gu, 490, 140)) throw new Error('鼓廊 烬卫 dry N');
+  if (inWater(gu, 520, 200) || inOil(gu, 520, 200)) throw new Error('鼓廊 烬卫 dry E');
+  if (inWater(gu, 490, 260) || inOil(gu, 490, 260)) throw new Error('鼓廊 烬卫 dry S');
+  if (!inWater(gu, 750, 350)) throw new Error('鼓廊 wet bag');
+  if (inWater(gu, 400, 100)) throw new Error('鼓廊 north shelf wet');
+  for (let i = 0; i < gu.crates.length; i++) {
+    const c = gu.crates[i];
+    if (circleRect(gu.player.x, gu.player.y, gu.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('鼓廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 450; x += 10) {
+    for (let i = 0; i < gu.crates.length; i++) {
+      const c = gu.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('鼓廊 crate on dry walk');
+      }
+    }
+  }
+  const guN = gu.enemies.find(function (e) { return Math.abs(e.x - 490) < 1 && Math.abs(e.y - 140) < 1; });
+  const guE = gu.enemies.find(function (e) { return Math.abs(e.x - 520) < 1 && Math.abs(e.y - 200) < 1; });
+  const guS = gu.enemies.find(function (e) { return Math.abs(e.x - 490) < 1 && Math.abs(e.y - 260) < 1; });
+  if (!guN || !guE || !guS) throw new Error('鼓廊 three 烬卫 seats');
+  const guSeats = [guN, guE, guS];
+  for (let i = 0; i < guSeats.length; i++) {
+    const e = guSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= BLAST_R + (e.r || ENEMY_R)) throw new Error('鼓廊 primary misses 烬卫');
+    if (!(dPlant < DRUM_R)) throw new Error('鼓廊 drum reaches 烬卫');
+  }
+  const guCoreCx = guBox.x + guBox.w * 0.5;
+  const guCoreCy = guBox.y + guBox.h * 0.5;
+  if (!(dist(guCoreCx, guCoreCy, 400, 200) > BLAST_R)) throw new Error('鼓廊 core outside plant blast');
+  gu.player.x = 80;
+  gu.player.y = 80;
+  gu.player.hearts = 3;
+  gu.player.inv = 2;
+  gu.hitstop = 0;
+  gu.embers.length = 0;
+  const guGround = gu.items.find(function (it) { return it.kind === 'drum' && !it.taken; });
+  if (!guGround) throw new Error('鼓廊 ground 鼓爆 present');
+  gu.player.x = guGround.x;
+  gu.player.y = 200;
+  update(gu, 0.016);
+  if (gu.drumReady !== true) throw new Error('pick drum → drumReady');
+  if (gu.toast !== TOAST.drumGet) throw new Error('捡到鼓爆 room');
+  gu.player.x = 80;
+  gu.player.y = 80;
+  gu.player.inv = 2;
+  gu.hitstop = 0;
+  gu.embers.length = 0;
+  const guHpN = guN.hp;
+  const guHpE = guE.hp;
+  const guHpS = guS.hp;
+  explode(gu, 400, 200, false);
+  if (gu.drumReady) throw new Error('鼓廊 drum spends');
+  if (gu.toast !== TOAST.drumUse) throw new Error('鼓开了 room');
+  if (!gu.drums || gu.drums.length !== 1) throw new Error('鼓廊 wave spawned');
+  if (Math.abs(gu.drums[0].r - BLAST_R) > 1e-6) throw new Error('鼓廊 wave starts BLAST_R');
+  if (guN.hp !== guHpN || guE.hp !==  guHpE || guS.hp !== guHpS) throw new Error('鼓廊 primary misses');
+  gu.hitstop = 0;
+  for (let t = 0; t < 0.55; t += 0.016) updateDrums(gu, 0.016);
+  if (gu.drums.length !== 0) throw new Error('鼓廊 wave finishes');
+  if (!(guN.hp === guHpN - DRUM_DMG || guN.hp <= 0)) throw new Error('鼓廊 drum dmg N');
+  if (!(guE.hp === guHpE - DRUM_DMG || guE.hp <= 0)) throw new Error('鼓廊 drum dmg E');
+  if (!(guS.hp ===  guHpS - DRUM_DMG ||  guS.hp <= 0)) throw new Error('鼓廊 drum dmg S');
+  if (!(guE.shoveT > 0) || !(guE.shoveVx > 0)) throw new Error('鼓廊 knock east');
+  gu.drumReady = true;
+  dropSpark(gu, 300, 80, false);
+  if (gu.drumReady !== true) throw new Error('dropSpark keeps 鼓爆');
+  gu.input.dash = true;
+  gu.player.dashT = 0;
+  gu.player.dashCd = 0;
+  gu.hitstop = 0;
+  update(gu, 0.016);
+  if (gu.drumReady !== true) throw new Error('dash does not consume 鼓爆');
+  const both = makeState();
+  resetRoom(both, 0, false);
+  both.fanReady = true;
+  both.drumReady = true;
+  both.player.x = 80;
+  both.player.y = 80;
+  both.player.inv = 2;
+  explode(both, 200, 200, false);
+  if (both.fanReady) throw new Error('same boom spends 扇爆');
+  if (both.drumReady) throw new Error('same boom spends 鼓爆');
+  if (!both.fans || !both.fans.length) throw new Error('same boom fans');
+  if (!both.drums || !both.drums.length) throw new Error('same boom drums');
+  const drumSelf = makeState();
+  resetRoom(drumSelf, 0, false);
+  drumSelf.drumReady = true;
+  drumSelf.player.x = 400;
+  drumSelf.player.y = 80;
+  drumSelf.player.inv = 0;
+  drumSelf.player.hearts = 3;
+  explode(drumSelf, 400, 200, false);
+  drumSelf.hitstop = 0;
+  for (let t = 0; t < 0.55; t += 0.016) updateDrums(drumSelf, 0.016);
+  if (drumSelf.player.hearts !== 2) throw new Error('own drum hurts player');
+  drumSelf.player.hearts = 3;
+  drumSelf.player.inv = 0;
+  drumSelf.player.dashT = DASH_TIME;
+  drumSelf.drums = [{ x: 400, y: 200, r: BLAST_R, hit: Object.create(null) }];
+  drumSelf.hitstop = 0;
+  for (let t = 0; t < 0.55; t += 0.016) updateDrums(drumSelf, 0.016);
+  if (drumSelf.player.hearts !== 3) throw new Error('dash i-frames skip drum');
+  gu.drumReady = true;
+  gu.sparks.length = 0;
+  if (gu.drums) gu.drums.length = 0;
+  gu.player.x = 80;
+  gu.player.y = 80;
+  gu.player.dashT = 0;
+  gu.player.dashCd = 0;
+  gu.player.vx = 0;
+  gu.player.vy = 0;
+  gu.player.inv = 2;
+  gu.input.x = 0;
+  gu.input.y = 0;
+  gu.input.dash = false;
+  gu.hitstop = 0;
+  gu.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(gu, 120, 120, false);
+  if (!gu.sparks[gu.sparks.length - 1].wet) throw new Error('鼓廊 wet spark');
+  const guBooms = gu.stats.booms;
+  for (let i = 0; i < 24; i++) update(gu, 0.1);
+  if (gu.drumReady !== true) throw new Error('鼓廊 wet fizzle does not consume');
+  if (gu.stats.booms !==  guBooms) throw new Error('鼓廊 wet no extra boom');
+  gu.waters = [];
+  explode(gu, 200, 200, false, false, false, { fork: true });
+  if (gu.drumReady !== true) throw new Error('鼓廊 fork does not consume');
+  gu.echoReady = true;
+  explode(gu, 200, 200, false);
+  gu.drumReady = true;
+  for (let i = 0; i < 12; i++) update(gu, 0.05);
+  if (gu.drumReady !== true) throw new Error('鼓廊 echo does not consume');
+  gu.fanReady = true;
+  explode(gu, 200, 200, false);
+  gu.drumReady = true;
+  gu.hitstop = 0;
+  updateFans(gu, FAN_DT * FAN_N + 0.05);
+  if (gu.drumReady !== true) throw new Error('鼓廊 fan-fork does not consume');
+  gu.spinReady = true;
+  explode(gu, 200, 200, false);
+  gu.drumReady = true;
+  gu.hitstop = 0;
+  updateSpins(gu, SPIN_DT * SPIN_N + 0.05);
+  if (gu.drumReady !== true) throw new Error('鼓廊 spin-orbit does not consume');
+  gu.waters = [];
+  explode(gu, guBox.x + guBox.w * 0.5,  guBox.y - 20, false);
+  if (!guBox.open) throw new Error('鼓廊 dry trail should open 心核');
+  takeCore(gu, { x: 100, y: 100 });
+  if (!gu.won || gu.toast !== TOAST.all) throw new Error('鼓廊 should 通关');
+  const hudGu = makeState();
+  resetRoom(hudGu, 38, false);
+  if (roomHudText(hudGu).indexOf('鼓廊 · 39/') !== 0) throw new Error('HUD 鼓廊 39/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (DRUM_R !== 150) throw new Error('DRUM_R 150');
+  if (DRUM_V !== 320) throw new Error('DRUM_V 320');
+  if (DRUM_W !== 20) throw new Error('DRUM_W 20');
+  if (DRUM_DMG !== 2) throw new Error('DRUM_DMG 2');
+  if (DRUM_KB !== 220) throw new Error('DRUM_KB 220');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.drumGet !== '捡到鼓爆') throw new Error('捡到鼓爆');
+  if (TOAST.drumUse !== '鼓开了') throw new Error('鼓开了 toast');
+  if (TOAST.drumRoom !== '鼓过去清场') throw new Error('鼓过去清场');
+
+  const lastWin = makeState();
+  resetRoom(lastWin, ROOMS.length - 1, false);
+  takeCore(lastWin, { x: 100, y: 100 });
+  if (!lastWin.won || lastWin.toast !== TOAST.all) throw new Error('last room 通关');
 
 
   clearProgress();
