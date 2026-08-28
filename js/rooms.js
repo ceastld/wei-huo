@@ -1,4 +1,6 @@
-{
+'use strict';
+// Generated from levels/rooms.json. Keep in sync; do not hand-edit.
+var WEI_HUO_ROOMS = {
   "rooms": [
     {
       "id": "kongchang",
@@ -326,4 +328,7 @@
       ]
     }
   ]
+};
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = WEI_HUO_ROOMS;
 }

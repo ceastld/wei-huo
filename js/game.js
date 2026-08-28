@@ -2,8 +2,10 @@
 
 const TAIL_T = 2.0;
 const SPARK_GAP = 18;
-const BLAST_R = 40;
-const HOT_BLAST_R = 68;
+const BLAST_R = 36;
+const HOT_BLAST_R = 56;
+const VIEW_W = 960;
+const VIEW_H = 540;
 const PLAYER_R = 11;
 const PLAYER_SPEED = 178;
 const DASH_SPEED = 520;
@@ -15,7 +17,8 @@ const ENEMY_HP = 3;
 const HEART_MAX = 3;
 const HITSTOP = 0.08;
 const IFRAMES = 0.95;
-const CRATE_S = 40;
+const CRATE = 48;
+const NEXT_WAIT = 0.7;
 
 const NAMES = {
   title: '尾火',
@@ -28,53 +31,99 @@ const NAMES = {
   hint: '跑过的路两秒后会爆',
 };
 
+const TOAST = {
+  boom: '焰辙爆了',
+  hot: '烫辙',
+  dash: '冲出去',
+  self: '别踩自己的尾',
+  crate: '箱开了',
+  foe: '烬卫倒了',
+  fizzle: '水洼熄了',
+  hold: '辙收住了',
+  heal: '回了一心',
+  core: '心核到手',
+  clear: '过关',
+  all: '通关',
+  oob: '出界了',
+  bump: '撞上了',
+  empty: '心空了',
+  again: '再来',
+  night: '夜市还亮着',
+};
+
 const COL = {
   bg: '#14080a',
   ember: '#ff6a1a',
   gold: '#ffd24a',
   water: '#3a6b8c',
   core: '#ff5d8f',
-  ash: '#6b5344',
   heart: '#ff5d8f',
+  ash: '#6b5344',
 };
 
-const ROOM_NAMES = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市'];
-
-let ROOM_PACK = null;
+let ROOMS = [];
 
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 function dist(ax, ay, bx, by) { return Math.hypot(bx - ax, by - ay); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 
-function prefersReduce() {
-  try {
-    return !!(typeof window !== 'undefined' && window.matchMedia &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  } catch (err) {
-    return false;
+function adoptRooms(pack) {
+  if (pack && pack.rooms && pack.rooms.length) {
+    ROOMS = pack.rooms;
+    return true;
   }
+  return false;
 }
 
-function audioApi() {
-  if (typeof window !== 'undefined' && window.WeiHuoAudio) return window.WeiHuoAudio;
-  if (typeof WeiHuoAudio !== 'undefined') return WeiHuoAudio;
-  if (typeof window !== 'undefined' && window.AudioFx) return window.AudioFx;
-  if (typeof AudioFx !== 'undefined') return AudioFx;
-  return null;
+function ensureRooms() {
+  if (ROOMS.length) return ROOMS;
+  if (typeof WEI_HUO_ROOMS !== 'undefined') adoptRooms(WEI_HUO_ROOMS);
+  if (ROOMS.length) return ROOMS;
+  if (typeof require === 'function') {
+    try { adoptRooms(require('./rooms.js')); } catch (e) {}
+    if (ROOMS.length) return ROOMS;
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      adoptRooms(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'levels', 'rooms.json'), 'utf8')));
+    } catch (e2) {}
+  }
+  return ROOMS;
 }
 
-function unlockAudio() {
-  const api = audioApi();
-  if (api && typeof api.unlock === 'function') api.unlock();
+function roomW(r) {
+  if (!r) return VIEW_W;
+  if (r.w) return r.w;
+  if (r.size && r.size.w) return r.size.w;
+  return VIEW_W;
 }
 
-function sfx(name) {
-  const api = audioApi();
-  if (!api) return;
-  const alias = { boom: 'explode', heal: 'pickup', open: 'beep' };
-  const key = alias[name] || name;
-  if (typeof api[key] === 'function') api[key]();
-  else if (typeof api[name] === 'function') api[name]();
+function roomH(r) {
+  if (!r) return VIEW_H;
+  if (r.h) return r.h;
+  if (r.size && r.size.h) return r.size.h;
+  return VIEW_H;
+}
+
+function roomSpawn(r) {
+  if (r && r.spawn) return r.spawn;
+  if (r && r.player) return r.player;
+  return { x: 80, y: 80 };
+}
+
+function roomFit(s) {
+  const rw = (s && s.roomW) || VIEW_W;
+  const rh = (s && s.roomH) || VIEW_H;
+  const scale = Math.min(VIEW_W / rw, VIEW_H / rh);
+  return { scale: scale, ox: (VIEW_W - rw * scale) / 2, oy: (VIEW_H - rh * scale) / 2 };
+}
+
+function reducedMotion() {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function hitstopAmt() {
+  return reducedMotion() ? 0.02 : HITSTOP;
 }
 
 function circleRect(cx, cy, cr, rx, ry, rw, rh) {
@@ -91,77 +140,46 @@ function inWater(s, x, y) {
   return false;
 }
 
-function separateCircleRect(ent, rx, ry, rw, rh) {
-  const nx = clamp(ent.x, rx, rx + rw);
-  const ny = clamp(ent.y, ry, ry + rh);
-  let dx = ent.x - nx;
-  let dy = ent.y - ny;
-  let d = Math.hypot(dx, dy);
-  if (d < 1e-4) {
-    const left = ent.x - rx;
-    const right = rx + rw - ent.x;
-    const top = ent.y - ry;
-    const bot = ry + rh - ent.y;
-    const m = Math.min(left, right, top, bot);
-    if (m === left) ent.x = rx - ent.r;
-    else if (m === right) ent.x = rx + rw + ent.r;
-    else if (m === top) ent.y = ry - ent.r;
-    else ent.y = ry + rh + ent.r;
-    return true;
-  }
-  if (d < ent.r) {
-    const pen = ent.r - d;
-    ent.x += (dx / d) * pen;
-    ent.y += (dy / d) * pen;
-    return true;
-  }
-  return false;
+function audioPack() {
+  if (typeof WeiHuoAudio !== 'undefined' && WeiHuoAudio) return WeiHuoAudio;
+  if (typeof AudioFx !== 'undefined' && AudioFx) return AudioFx;
+  return null;
 }
 
-function blockCrates(s, ent) {
-  for (let i = 0; i < s.crates.length; i++) {
-    const c = s.crates[i];
-    if (c.open) continue;
-    separateCircleRect(ent, c.x, c.y, c.w, c.h);
-  }
+function unlockAudio() {
+  const pack = audioPack();
+  if (pack && pack.unlock) pack.unlock();
 }
 
-function makeState() {
-  return {
-    roomIndex: 0,
-    room: null,
-    roomW: 720,
-    roomH: 480,
-    player: {
-      x: 96, y: 240, r: PLAYER_R,
-      vx: 0, vy: 0, faceX: 1, faceY: 0,
-      dashT: 0, dashCd: 0, inv: 0, hearts: HEART_MAX,
-      squash: 0,
-    },
-    lastSparkX: 96,
-    lastSparkY: 240,
-    sparks: [],
-    enemies: [],
-    crates: [],
-    waters: [],
-    items: [],
-    parts: [],
-    swells: [],
-    input: { x: 0, y: 0, dash: false },
-    cam: { x: 0, y: 0, punch: 0, dx: 1, dy: 0 },
-    hitstop: 0,
-    flash: 0,
-    won: false,
-    dead: false,
-    cleared: false,
-    advanceT: 0,
-    toast: '',
-    toastT: 0,
-    toastTone: 'gold',
-    stats: { booms: 0, fizzles: 0, drops: 0 },
-    time: 0,
-    reduce: prefersReduce(),
+function sfx(name) {
+  const pack = audioPack();
+  if (!pack) return;
+  const aliases = {
+    boom: ['explode', 'boom'],
+    explode: ['explode', 'boom'],
+    heal: ['pickup', 'heal'],
+    pickup: ['pickup', 'heal'],
+    open: ['pickup', 'open', 'beep'],
+    dash: ['dash'],
+    hurt: ['hurt'],
+    win: ['win'],
+    fizzle: ['fizzle'],
+    beep: ['beep'],
   };
+  const list = aliases[name] || [name];
+  for (let i = 0; i < list.length; i++) {
+    const fn = pack[list[i]];
+    if (typeof fn === 'function') {
+      fn();
+      return;
+    }
+  }
+}
+
+function toast(s, msg, t, color) {
+  s.toast = msg;
+  s.toastT = t == null ? 1.1 : t;
+  s.toastColor = color || COL.gold;
 }
 
 function lootKind(drop) {
@@ -170,18 +188,60 @@ function lootKind(drop) {
   return null;
 }
 
-function applyRoom(s, index) {
-  const rooms = ROOM_PACK.rooms;
-  const i = ((index % rooms.length) + rooms.length) % rooms.length;
-  const room = rooms[i];
-  const crateS = (ROOM_PACK.defaults && ROOM_PACK.defaults.crate) || CRATE_S;
-  s.roomIndex = i;
-  s.room = room;
-  s.roomW = room.size.w;
-  s.roomH = room.size.h;
-  s.player.x = room.player.x;
-  s.player.y = room.player.y;
-  s.player.r = PLAYER_R;
+function makeState() {
+  return {
+    roomIndex: 0,
+    roomW: VIEW_W,
+    roomH: VIEW_H,
+    roomName: '',
+    roomId: '',
+    player: {
+      x: 110, y: 310, r: PLAYER_R,
+      vx: 0, vy: 0, faceX: 1, faceY: 0,
+      dashT: 0, dashCd: 0, inv: 0, hearts: HEART_MAX,
+    },
+    lastSparkX: 110,
+    lastSparkY: 310,
+    sparks: [],
+    enemies: [],
+    crates: [],
+    waters: [],
+    items: [],
+    parts: [],
+    rings: [],
+    input: { x: 0, y: 0, dash: false },
+    cam: { x: 0, y: 0, punch: 0 },
+    hitstop: 0,
+    flash: 0,
+    won: false,
+    dead: false,
+    pendingNext: 0,
+    toast: '',
+    toastT: 0,
+    toastColor: COL.gold,
+    stats: { booms: 0, fizzles: 0, drops: 0 },
+    time: 0,
+  };
+}
+
+function resetRoom(s, index, keepHearts) {
+  ensureRooms();
+  if (index == null) index = s.roomIndex || 0;
+  if (index < 0) index = 0;
+  if (ROOMS.length && index >= ROOMS.length) index = ROOMS.length - 1;
+  const room = ROOMS[index] || {
+    id: '', name: '', w: VIEW_W, h: VIEW_H,
+    spawn: { x: 110, y: 310 }, puddles: [], crates: [], enemies: [],
+  };
+  const hearts = keepHearts ? s.player.hearts : HEART_MAX;
+  const sp = roomSpawn(room);
+  s.roomIndex = index;
+  s.roomW = roomW(room);
+  s.roomH = roomH(room);
+  s.roomName = room.name || '';
+  s.roomId = room.id || '';
+  s.player.x = sp.x;
+  s.player.y = sp.y;
   s.player.vx = 0;
   s.player.vy = 0;
   s.player.faceX = 1;
@@ -189,21 +249,19 @@ function applyRoom(s, index) {
   s.player.dashT = 0;
   s.player.dashCd = 0;
   s.player.inv = 0;
-  s.player.hearts = HEART_MAX;
-  s.player.squash = 0;
+  s.player.hearts = hearts;
   s.lastSparkX = s.player.x;
   s.lastSparkY = s.player.y;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
-  s.swells.length = 0;
+  s.rings.length = 0;
   s.won = false;
   s.dead = false;
-  s.cleared = false;
-  s.advanceT = 0;
+  s.pendingNext = 0;
   s.toast = '';
   s.toastT = 0;
-  s.toastTone = 'gold';
+  s.toastColor = COL.gold;
   s.hitstop = 0;
   s.flash = 0;
   s.cam.x = 0;
@@ -213,32 +271,28 @@ function applyRoom(s, index) {
   s.stats.booms = 0;
   s.stats.fizzles = 0;
   s.stats.drops = 0;
-  s.waters = (room.puddles || []).map((p) => ({ x: p.x, y: p.y, w: p.w, h: p.h }));
-  s.crates = (room.crates || []).map((c) => ({
-    x: c.x - crateS * 0.5,
-    y: c.y - crateS * 0.5,
-    w: crateS,
-    h: crateS,
-    open: false,
-    loot: lootKind(c.drop),
-  }));
-  s.enemies = (room.enemies || []).map((e) => ({
-    x: e.x,
-    y: e.y,
-    r: ENEMY_R,
-    hp: ENEMY_HP,
-    hitT: 0,
-  }));
-  if (room.name === '夜市') toast(s, '夜市还亮着', 'gold');
-}
-
-function resetRoom(s) {
-  applyRoom(s, s.roomIndex || 0);
+  s.waters = (room.puddles || []).map(function (p) {
+    return { x: p.x, y: p.y, w: p.w, h: p.h };
+  });
+  s.crates = (room.crates || []).map(function (c) {
+    return {
+      x: c.x - CRATE * 0.5,
+      y: c.y - CRATE * 0.5,
+      w: CRATE,
+      h: CRATE,
+      open: false,
+      loot: lootKind(c.drop),
+    };
+  });
+  s.enemies = (room.enemies || []).map(function (e) {
+    return { x: e.x, y: e.y, r: ENEMY_R, hp: ENEMY_HP, hitT: 0 };
+  });
+  if (room.name === '夜市') toast(s, TOAST.night, 1.1, COL.gold);
 }
 
 function dropSpark(s, x, y, hot) {
   const wet = inWater(s, x, y);
-  s.sparks.push({ x, y, t: TAIL_T, hot: !!hot, wet, dead: false });
+  s.sparks.push({ x: x, y: y, t: TAIL_T, hot: !!hot, wet: wet, dead: false });
   s.stats.drops += 1;
   return s.sparks[s.sparks.length - 1];
 }
@@ -259,72 +313,96 @@ function layTrail(s, fromX, fromY, toX, toY, hot) {
   }
 }
 
-function burst(s, x, y, n, color, speed, life, lift) {
-  if (s.reduce) n = Math.max(2, Math.floor(n * 0.5));
-  const life0 = life || 0.28;
+function burst(s, x, y, n, color, speed) {
+  if (reducedMotion()) n = Math.max(2, Math.floor(n * 0.5));
   for (let i = 0; i < n; i++) {
     const a = (Math.PI * 2 * i) / n + Math.random() * 0.4;
     const sp = speed * (0.55 + Math.random() * 0.7);
     s.parts.push({
-      x, y,
+      x: x, y: y,
       vx: Math.cos(a) * sp,
-      vy: Math.sin(a) * sp + (lift ? -40 : 0),
-      t: life0 * (0.75 + Math.random() * 0.45),
-      max: life0,
+      vy: Math.sin(a) * sp,
+      t: 0.28 + Math.random() * 0.22,
       r: 2 + Math.random() * 3,
-      color,
-      lift: !!lift,
+      color: color,
     });
   }
 }
 
-function spawnSwell(s, x, y, baseR, hot, dual) {
-  s.swells.push({ x, y, t: 0, baseR, hot: !!hot, dual: !!dual });
+function punch(s, amt) {
+  if (reducedMotion()) return;
+  s.cam.punch = Math.max(s.cam.punch, amt);
 }
 
-function punch(s, amt, dirX, dirY) {
-  if (s.reduce) return;
-  s.cam.punch = Math.max(s.cam.punch, amt);
-  if (dirX != null && dirY != null) {
-    const d = Math.hypot(dirX, dirY) || 1;
-    s.cam.dx = dirX / d;
-    s.cam.dy = dirY / d;
+function addRing(s, x, y, r, hot) {
+  s.rings.push({
+    x: x, y: y,
+    r0: r * 0.7,
+    r1: r * (hot ? 1.5 : 1.35),
+    t: 0,
+    grow: 0.016,
+    life: 0.096,
+    hot: !!hot,
+  });
+}
+
+function resolveCircleRect(ent, rx, ry, rw, rh) {
+  const nx = clamp(ent.x, rx, rx + rw);
+  const ny = clamp(ent.y, ry, ry + rh);
+  const dx = ent.x - nx;
+  const dy = ent.y - ny;
+  const d = Math.hypot(dx, dy);
+  if (d === 0) {
+    const left = ent.x - rx;
+    const right = rx + rw - ent.x;
+    const top = ent.y - ry;
+    const bot = ry + rh - ent.y;
+    const m = Math.min(left, right, top, bot);
+    if (m === left) ent.x = rx - ent.r;
+    else if (m === right) ent.x = rx + rw + ent.r;
+    else if (m === top) ent.y = ry - ent.r;
+    else ent.y = ry + rh + ent.r;
+    return true;
+  }
+  if (d < ent.r) {
+    const push = ent.r - d;
+    ent.x += (dx / d) * push;
+    ent.y += (dy / d) * push;
+    return true;
+  }
+  return false;
+}
+
+function resolveCrates(s, ent) {
+  for (let i = 0; i < s.crates.length; i++) {
+    const c = s.crates[i];
+    if (c.open) continue;
+    resolveCircleRect(ent, c.x, c.y, c.w, c.h);
   }
 }
 
-function toast(s, text, tone, hold) {
-  s.toast = text;
-  s.toastT = hold != null ? hold : 1.1;
-  s.toastTone = tone || 'gold';
-}
-
-function hitstopFor(s, sec) {
-  const amt = s.reduce ? 0.02 : sec;
-  s.hitstop = Math.max(s.hitstop, amt);
-}
-
-function hurtPlayer(s, srcX, srcY, reason) {
+function hurtPlayer(s, srcX, srcY, why) {
   const p = s.player;
-  if (s.won || s.dead || p.inv > 0) return false;
+  if (s.won || s.dead || s.pendingNext > 0 || p.inv > 0) return false;
   p.hearts -= 1;
   p.inv = IFRAMES;
-  p.squash = 0.14;
   s.flash = 0.22;
-  hitstopFor(s, HITSTOP);
-  punch(s, 6, p.x - (srcX != null ? srcX : p.x), p.y - (srcY != null ? srcY : p.y - 1));
-  burst(s, p.x, p.y, 6, COL.heart, 90, 0.2);
+  s.hitstop = Math.max(s.hitstop, hitstopAmt());
+  punch(s, 6);
   if (srcX != null) {
     const d = dist(p.x, p.y, srcX, srcY) || 1;
     p.x += ((p.x - srcX) / d) * 18;
     p.y += ((p.y - srcY) / d) * 18;
   }
   sfx('hurt');
+  burst(s, p.x, p.y, 6, COL.heart, 110);
+  if (why === 'blast') toast(s, TOAST.self, 1.1, COL.heart);
+  else if (why === 'oob') toast(s, TOAST.oob, 1.1, COL.heart);
+  else toast(s, TOAST.bump, 1.1, COL.heart);
   if (p.hearts <= 0) {
     p.hearts = 0;
     s.dead = true;
-    toast(s, '心空了', 'heart', 99);
-  } else {
-    toast(s, reason || '别踩自己的尾', 'heart');
+    toast(s, TOAST.empty, 99, COL.heart);
   }
   return true;
 }
@@ -332,34 +410,32 @@ function hurtPlayer(s, srcX, srcY, reason) {
 function explode(s, x, y, hot) {
   const r = hot ? HOT_BLAST_R : BLAST_R;
   s.stats.booms += 1;
-  burst(s, x, y, hot ? 16 : 10, hot ? COL.gold : COL.ember, hot ? 220 : 170, hot ? 0.36 : 0.28);
-  burst(s, x, y, hot ? 8 : 6, COL.gold, 100, 0.4);
-  spawnSwell(s, x, y, r, hot, false);
-  sfx('explode');
+  burst(s, x, y, hot ? 16 : 10, hot ? COL.gold : COL.ember, hot ? 220 : 170);
+  addRing(s, x, y, r, hot);
+  sfx('boom');
 
-  let hit = false;
-  let notable = false;
   const p = s.player;
+  let hit = false;
   if (!s.won && !s.dead && dist(p.x, p.y, x, y) <= r + p.r) {
+    hurtPlayer(s, x, y, 'blast');
     hit = true;
-    hurtPlayer(s, x, y, '别踩自己的尾');
   }
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     if (dist(e.x, e.y, x, y) <= r + e.r) {
-      hit = true;
       e.hp -= hot ? 2 : 1;
       e.hitT = 0.18;
       const d = dist(e.x, e.y, x, y) || 1;
       e.x += ((e.x - x) / d) * 22;
       e.y += ((e.y - y) / d) * 22;
+      s.hitstop = Math.max(s.hitstop, hitstopAmt());
+      punch(s, 6);
+      hit = true;
       if (e.hp <= 0) {
-        burst(s, e.x, e.y, 12, COL.ember, 150, 0.32);
-        burst(s, e.x, e.y, 6, COL.ash, 80, 0.28);
-        toast(s, '烬卫倒了', 'gold');
-        notable = true;
+        burst(s, e.x, e.y, 12, COL.ember, 140);
+        toast(s, TOAST.foe, 1.1, COL.ember);
       }
     }
   }
@@ -368,13 +444,13 @@ function explode(s, x, y, hot) {
     const c = s.crates[i];
     if (c.open) continue;
     if (circleRect(x, y, r, c.x, c.y, c.w, c.h)) {
-      hit = true;
       c.open = true;
-      sfx('beep');
-      burst(s, c.x + c.w * 0.5, c.y + c.h * 0.5, 8, COL.gold, 120, 0.24);
-      burst(s, c.x + c.w * 0.5, c.y + c.h * 0.5, 4, COL.ash, 70, 0.2);
-      toast(s, '箱开了', 'gold');
-      notable = true;
+      hit = true;
+      s.hitstop = Math.max(s.hitstop, hitstopAmt());
+      punch(s, 6);
+      sfx('open');
+      burst(s, c.x + c.w * 0.5, c.y + c.h * 0.5, 8, COL.gold, 120);
+      toast(s, TOAST.crate, 1.1, COL.gold);
       if (c.loot) {
         s.items.push({
           kind: c.loot,
@@ -387,13 +463,35 @@ function explode(s, x, y, hot) {
     }
   }
 
-  if (hit) {
-    hitstopFor(s, HITSTOP);
-    punch(s, 6, p.x - x, p.y - y);
-    if (!notable && s.toastTone !== 'heart') toast(s, hot ? '烫辙' : '焰辙爆了', 'gold');
+  if (hit) punch(s, 6);
+  else punch(s, 2);
+}
+
+function takeCore(s, it) {
+  sfx('win');
+  burst(s, it.x, it.y, 18, COL.core, 200);
+  addRing(s, it.x, it.y, 40, true);
+  s.hitstop = Math.max(s.hitstop, hitstopAmt());
+  punch(s, 6);
+  const last = s.roomIndex >= ensureRooms().length - 1;
+  if (last) {
+    s.won = true;
+    toast(s, TOAST.all, 99, COL.core);
   } else {
-    punch(s, 2, p.x - x, p.y - y);
+    s.pendingNext = NEXT_WAIT;
+    toast(s, TOAST.core, 1.1, COL.core);
   }
+}
+
+function goNext(s) {
+  const rooms = ensureRooms();
+  if (s.roomIndex >= rooms.length - 1) {
+    s.won = true;
+    toast(s, TOAST.all, 99, COL.core);
+    return;
+  }
+  resetRoom(s, s.roomIndex + 1, true);
+  toast(s, TOAST.clear, 1.1, COL.core);
 }
 
 function updateSparks(s, dt) {
@@ -405,45 +503,40 @@ function updateSparks(s, dt) {
     k.dead = true;
     if (k.wet) {
       s.stats.fizzles += 1;
-      burst(s, k.x, k.y, 5, COL.water, 70, 0.22, true);
-      burst(s, k.x, k.y, 3, COL.ash, 40, 0.18, true);
+      burst(s, k.x, k.y, 5, COL.water, 70);
       sfx('fizzle');
-      toast(s, '水洼熄了', 'water');
+      toast(s, TOAST.fizzle, 1.1, COL.water);
     } else {
       explode(s, k.x, k.y, k.hot);
     }
   }
   if (s.sparks.length > 80) {
-    s.sparks = s.sparks.filter((k) => !k.dead);
+    s.sparks = s.sparks.filter(function (k) { return !k.dead; });
   }
 }
 
-function tickJuice(s, dt) {
-  if (s.toastT > 0) s.toastT -= dt;
-  if (s.flash > 0) s.flash -= dt;
-  if (s.player.squash > 0) s.player.squash -= dt;
-  for (let i = s.swells.length - 1; i >= 0; i--) {
-    s.swells[i].t += dt;
-    if (s.swells[i].t > 0.11) s.swells.splice(i, 1);
-  }
-  if (s.cam.punch > 0) {
-    s.cam.x = s.cam.dx * s.cam.punch;
-    s.cam.y = s.cam.dy * s.cam.punch;
-    s.cam.punch *= Math.pow(0.04, dt);
-    if (s.cam.punch < 0.08) {
-      s.cam.punch = 0;
-      s.cam.x = 0;
-      s.cam.y = 0;
-    }
-  } else {
-    s.cam.x = 0;
-    s.cam.y = 0;
+function updateRings(s, dt) {
+  for (let i = s.rings.length - 1; i >= 0; i--) {
+    s.rings[i].t += dt;
+    if (s.rings[i].t >= s.rings[i].life) s.rings.splice(i, 1);
   }
 }
 
 function update(s, dt) {
   s.time += dt;
-  tickJuice(s, dt);
+  if (s.toastT > 0) s.toastT -= dt;
+  if (s.flash > 0) s.flash -= dt;
+  if (s.cam.punch > 0) {
+    s.cam.punch *= Math.pow(0.04, dt);
+    if (s.cam.punch < 0.08) s.cam.punch = 0;
+    s.cam.x = (Math.random() - 0.5) * 2 * s.cam.punch;
+    s.cam.y = (Math.random() - 0.5) * 2 * s.cam.punch;
+  } else {
+    s.cam.x = 0;
+    s.cam.y = 0;
+  }
+
+  updateRings(s, dt);
 
   if (s.hitstop > 0) {
     s.hitstop -= dt;
@@ -456,15 +549,16 @@ function update(s, dt) {
     q.t -= dt;
     q.x += q.vx * dt;
     q.y += q.vy * dt;
-    if (q.lift) q.vy -= 80 * dt;
     q.vx *= 0.9;
     q.vy *= 0.9;
     if (q.t <= 0) s.parts.splice(i, 1);
   }
 
-  if (s.advanceT > 0) {
-    s.advanceT -= dt;
-    if (s.advanceT <= 0) applyRoom(s, s.roomIndex + 1);
+  if (s.pendingNext > 0) {
+    s.pendingNext -= dt;
+    updateSparks(s, dt);
+    if (s.pendingNext <= 0) goNext(s);
+    return;
   }
 
   if (s.won || s.dead) {
@@ -490,10 +584,12 @@ function update(s, dt) {
     p.dashCd = DASH_CD;
     s.input.dash = false;
     sfx('dash');
-    hitstopFor(s, 0.04);
-    punch(s, 3, p.faceX, p.faceY);
-    burst(s, p.x, p.y, 4, COL.ember, 160, 0.12);
-    toast(s, '冲出去', 'gold');
+    toast(s, TOAST.dash, 1.1, COL.ember);
+    burst(s, p.x, p.y, 4, COL.ember, 90);
+    if (!reducedMotion()) {
+      s.hitstop = Math.max(s.hitstop, 0.04);
+      punch(s, 3);
+    }
   }
 
   const moving = p.dashT > 0 || il > 0.12;
@@ -511,18 +607,14 @@ function update(s, dt) {
   const oy = p.y;
   p.x += p.vx * dt;
   p.y += p.vy * dt;
-  blockCrates(s, p);
+  resolveCrates(s, p);
 
-  const minX = p.r;
-  const maxX = s.roomW - p.r;
-  const minY = p.r;
-  const maxY = s.roomH - p.r;
-  if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) {
-    const cx = clamp(ox, minX, maxX);
-    const cy = clamp(oy, minY, maxY);
-    p.x = clamp(p.x, minX, maxX);
-    p.y = clamp(p.y, minY, maxY);
-    hurtPlayer(s, cx, cy, '出界了');
+  const rw = s.roomW;
+  const rh = s.roomH;
+  if (p.x - p.r < 0 || p.x + p.r > rw || p.y - p.r < 0 || p.y + p.r > rh) {
+    p.x = clamp(p.x, p.r, rw - p.r);
+    p.y = clamp(p.y, p.r, rh - p.r);
+    hurtPlayer(s, clamp(ox, p.r, rw - p.r), clamp(oy, p.r, rh - p.r), 'oob');
   }
 
   if (moving) layTrail(s, ox, oy, p.x, p.y, hot);
@@ -540,10 +632,10 @@ function update(s, dt) {
     const d = dist(e.x, e.y, p.x, p.y) || 1;
     e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
     e.y += ((p.y - e.y) / d) * ENEMY_SPEED * dt;
-    blockCrates(s, e);
-    e.x = clamp(e.x, e.r, s.roomW - e.r);
-    e.y = clamp(e.y, e.r, s.roomH - e.r);
-    if (dist(e.x, e.y, p.x, p.y) < e.r + p.r - 1) hurtPlayer(s, e.x, e.y, '撞上了');
+    resolveCrates(s, e);
+    e.x = clamp(e.x, e.r, rw - e.r);
+    e.y = clamp(e.y, e.r, rh - e.r);
+    if (dist(e.x, e.y, p.x, p.y) < e.r + p.r - 1) hurtPlayer(s, e.x, e.y, 'bump');
   }
 
   for (let i = 0; i < s.items.length; i++) {
@@ -551,33 +643,13 @@ function update(s, dt) {
     if (it.taken) continue;
     if (dist(it.x, it.y, p.x, p.y) > it.r + p.r) continue;
     it.taken = true;
-    if (it.kind === 'core') {
-      takeCore(s, it);
-    } else if (it.kind === 'heal') {
+    if (it.kind === 'core') takeCore(s, it);
+    else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
-      toast(s, '回了一心', 'heart');
-      sfx('pickup');
-      burst(s, it.x, it.y, 8, COL.heart, 130, 0.26);
-      burst(s, it.x, it.y, 4, COL.gold, 90, 0.22);
+      toast(s, TOAST.heal, 1.1, COL.heart);
+      sfx('heal');
+      burst(s, it.x, it.y, 8, COL.heart, 130);
     }
-  }
-}
-
-function takeCore(s, it) {
-  sfx('win');
-  hitstopFor(s, HITSTOP);
-  punch(s, 6, 0, -1);
-  burst(s, it.x, it.y, 18, COL.core, 200, 0.4);
-  burst(s, it.x, it.y, 8, COL.gold, 140, 0.32);
-  spawnSwell(s, it.x, it.y, 48, false, true);
-  s.won = true;
-  const last = s.roomIndex >= ROOM_PACK.rooms.length - 1;
-  if (last) {
-    s.cleared = true;
-    toast(s, '通关', 'core', 99);
-  } else {
-    s.advanceT = 1.15;
-    toast(s, '心核到手', 'core');
   }
 }
 
@@ -610,37 +682,37 @@ function glow(ctx, x, y, r, color, a) {
   ctx.globalAlpha = 1;
 }
 
-function swellScale(t, hot) {
-  const peak = hot ? 1.5 : 1.35;
-  if (t < 0.016) return lerp(0.7, peak, t / 0.016);
-  if (t < 0.096) return lerp(peak, 0, (t - 0.016) / 0.08);
-  return 0;
-}
-
 function draw(s, ctx) {
-  const W = s.roomW;
-  const H = s.roomH;
   ctx.save();
   ctx.translate(s.cam.x, s.cam.y);
+  ctx.fillStyle = '#0a0406';
+  ctx.fillRect(-30, -30, VIEW_W + 60, VIEW_H + 60);
+
+  const fit = roomFit(s);
+  ctx.translate(fit.ox, fit.oy);
+  ctx.scale(fit.scale, fit.scale);
+
+  const rw = s.roomW;
+  const rh = s.roomH;
   ctx.fillStyle = COL.bg;
-  ctx.fillRect(-40, -40, W + 80, H + 80);
+  ctx.fillRect(0, 0, rw, rh);
 
   ctx.strokeStyle = 'rgba(255,106,26,0.22)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(2, 2, W - 4, H - 4);
+  ctx.lineWidth = 2 / fit.scale;
+  ctx.strokeRect(1, 1, rw - 2, rh - 2);
 
   ctx.strokeStyle = 'rgba(255,210,74,0.05)';
-  ctx.lineWidth = 1;
-  for (let x = 40; x < W; x += 40) {
+  ctx.lineWidth = 1 / fit.scale;
+  for (let x = 40; x < rw; x += 40) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
+    ctx.lineTo(x, rh);
     ctx.stroke();
   }
-  for (let y = 40; y < H; y += 40) {
+  for (let y = 40; y < rh; y += 40) {
     ctx.beginPath();
     ctx.moveTo(0, y);
-    ctx.lineTo(W, y);
+    ctx.lineTo(rw, y);
     ctx.stroke();
   }
 
@@ -649,14 +721,12 @@ function draw(s, ctx) {
     ctx.fillStyle = 'rgba(58,107,140,0.55)';
     ctx.fillRect(w.x, w.y, w.w, w.h);
     ctx.strokeStyle = 'rgba(180,220,240,0.35)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
-    if (w.w >= 48 && w.h >= 28) {
-      ctx.fillStyle = 'rgba(200,230,255,0.55)';
-      ctx.font = '12px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(NAMES.water, w.x + w.w / 2, w.y + w.h / 2 + 4);
-    }
+    ctx.lineWidth = 1.5 / fit.scale;
+    ctx.strokeRect(w.x + 1, w.y + 1, w.w - 2, w.h - 2);
+    ctx.fillStyle = 'rgba(200,230,255,0.55)';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(NAMES.water, w.x + w.w * 0.5, w.y + w.h * 0.5 + 4);
   }
 
   for (let i = 0; i < s.crates.length; i++) {
@@ -669,7 +739,7 @@ function draw(s, ctx) {
     ctx.fillStyle = '#3a2218';
     ctx.fillRect(c.x, c.y, c.w, c.h);
     ctx.strokeStyle = COL.gold;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1.5 / fit.scale;
     ctx.strokeRect(c.x + 1, c.y + 1, c.w - 2, c.h - 2);
     ctx.fillStyle = COL.gold;
     ctx.font = '13px sans-serif';
@@ -681,46 +751,45 @@ function draw(s, ctx) {
     const k = s.sparks[i];
     if (k.dead) continue;
     const age = 1 - k.t / TAIL_T;
-    let swell;
-    let col;
     if (k.wet) {
-      swell = 3.2 * clamp(k.t / TAIL_T, 0.15, 1);
-      col = mixHex(COL.ash, COL.water, clamp(k.t / TAIL_T, 0, 1));
-    } else {
-      const near = Math.pow(age, 2.8);
-      swell = (k.hot ? 4.6 : 3.2) + (k.hot ? 16 : 12) * near;
-      col = mixHex(COL.ember, COL.gold, age * age);
+      const shrink = 3.2 * (1 - age * 0.7);
+      glow(ctx, k.x, k.y, shrink * 2.2, COL.ash, 0.2);
+      ctx.beginPath();
+      ctx.fillStyle = mixHex(COL.water, COL.ash, age);
+      ctx.arc(k.x, k.y, shrink, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
     }
-    glow(ctx, k.x, k.y, swell * 3.4, col, 0.22 + age * 0.5);
+    const swell = k.hot ? 5 + 9 * age * age : 3.2 + 7 * age * age;
+    const col = mixHex(COL.ember, COL.gold, age * age);
+    glow(ctx, k.x, k.y, swell * 3.2, col, 0.22 + age * 0.45);
     ctx.beginPath();
     ctx.fillStyle = col;
     ctx.arc(k.x, k.y, swell, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  for (let i = 0; i < s.swells.length; i++) {
-    const sw = s.swells[i];
-    const k = swellScale(sw.t, sw.hot);
-    if (k <= 0) continue;
-    const goldish = sw.t >= 0.016;
-    if (sw.dual) {
-      ctx.strokeStyle = COL.core;
-      ctx.globalAlpha = 0.85;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(sw.x, sw.y, sw.baseR * k * 0.72, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = COL.gold;
-      ctx.beginPath();
-      ctx.arc(sw.x, sw.y, sw.baseR * k * 1.05, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
+  for (let i = 0; i < s.rings.length; i++) {
+    const ring = s.rings[i];
+    let rad;
+    let col;
+    let a;
+    if (ring.t < ring.grow) {
+      rad = lerp(ring.r0, ring.r1, ring.t / ring.grow);
+      col = COL.ember;
+      a = 0.85;
     } else {
-      ctx.strokeStyle = goldish ? COL.gold : COL.ember;
-      ctx.globalAlpha = goldish ? 0.9 : 0.75;
-      ctx.lineWidth = 3 + (sw.hot ? 2 : 0);
+      const k = (ring.t - ring.grow) / (ring.life - ring.grow);
+      rad = lerp(ring.r1, 0, k);
+      col = COL.gold;
+      a = 0.85 * (1 - k);
+    }
+    if (rad > 0.4) {
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 4 / fit.scale;
       ctx.beginPath();
-      ctx.arc(sw.x, sw.y, sw.baseR * k, 0, Math.PI * 2);
+      ctx.arc(ring.x, ring.y, rad, 0, Math.PI * 2);
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
@@ -763,7 +832,7 @@ function draw(s, ctx) {
     ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = COL.ember;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 / fit.scale;
     ctx.stroke();
     ctx.fillStyle = COL.ember;
     ctx.beginPath();
@@ -783,28 +852,23 @@ function draw(s, ctx) {
   const p = s.player;
   const blink = p.inv > 0 && Math.floor(s.time * 16) % 2 === 0;
   if (!blink) {
-    const sq = p.squash > 0 ? 0.78 : 1;
     glow(ctx, p.x, p.y, 26, COL.ember, 0.55);
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.scale(1 + (1 - sq) * 0.25, sq);
     ctx.beginPath();
     ctx.fillStyle = '#fff3d6';
-    ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = COL.gold;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 / fit.scale;
     ctx.stroke();
     ctx.beginPath();
     ctx.fillStyle = COL.ember;
-    ctx.arc(p.faceX * 3, p.faceY * 3, 3, 0, Math.PI * 2);
+    ctx.arc(p.x + p.faceX * 3, p.y + p.faceY * 3, 3, 0, Math.PI * 2);
     ctx.fill();
-    ctx.restore();
   }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
-    ctx.globalAlpha = clamp(q.t / Math.max(0.12, q.max || 0.35), 0, 1);
+    ctx.globalAlpha = clamp(q.t / 0.35, 0, 1);
     ctx.fillStyle = q.color;
     ctx.beginPath();
     ctx.arc(q.x, q.y, q.r, 0, Math.PI * 2);
@@ -814,7 +878,7 @@ function draw(s, ctx) {
 
   if (s.flash > 0) {
     ctx.fillStyle = 'rgba(255,40,60,' + (s.flash * 1.4) + ')';
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(0, 0, rw, rh);
   }
 
   ctx.restore();
@@ -835,7 +899,7 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
     }
   }
 
-  window.addEventListener('keydown', (e) => {
+  window.addEventListener('keydown', function (e) {
     unlockAudio();
     keys.add(e.code);
     if (e.code === 'Space') {
@@ -843,39 +907,35 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
       s.input.dash = true;
     }
     if (e.code === 'KeyR') {
-      applyRoom(s, s.cleared ? 0 : s.roomIndex);
-      toast(s, '再来', 'gold');
-    }
-    if (e.code === 'KeyN') {
-      applyRoom(s, s.roomIndex + 1);
+      resetRoom(s, s.roomIndex, false);
+      toast(s, TOAST.again, 1.1, COL.gold);
     }
     syncKeys();
   });
-  window.addEventListener('keyup', (e) => {
+  window.addEventListener('keyup', function (e) {
     keys.delete(e.code);
     if (e.code === 'Space') s.input.dash = false;
     syncKeys();
   });
 
   let mouseOn = false;
-  canvas.addEventListener('pointerdown', (e) => {
+  canvas.addEventListener('pointerdown', function (e) {
     if (e.pointerType === 'touch') return;
-    unlockAudio();
     mouseOn = true;
     aimMouse(e);
   });
-  window.addEventListener('pointerup', () => {
+  window.addEventListener('pointerup', function () {
     if (mouseOn) {
       mouseOn = false;
       if (!stick.active) { s.input.x = 0; s.input.y = 0; syncKeys(); }
     }
   });
-  canvas.addEventListener('pointermove', (e) => {
+  canvas.addEventListener('pointermove', function (e) {
     if (mouseOn) aimMouse(e);
   });
 
   function aimMouse(e) {
-    const world = screenToWorld(canvas, e.clientX, e.clientY);
+    const world = screenToWorld(canvas, e.clientX, e.clientY, s);
     const dx = world.x - s.player.x;
     const dy = world.y - s.player.y;
     const d = Math.hypot(dx, dy);
@@ -900,14 +960,14 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
     s.input.y = y * cl;
     setKnob(s.input.x, s.input.y);
   }
-  stick.addEventListener('pointerdown', (e) => {
+  stick.addEventListener('pointerdown', function (e) {
     unlockAudio();
     stick.active = true;
     stickId = e.pointerId;
     stick.setPointerCapture(e.pointerId);
     stickAt(e.clientX, e.clientY);
   });
-  stick.addEventListener('pointermove', (e) => {
+  stick.addEventListener('pointermove', function (e) {
     if (stick.active && e.pointerId === stickId) stickAt(e.clientX, e.clientY);
   });
   function endStick() {
@@ -921,21 +981,21 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
   stick.addEventListener('pointerup', endStick);
   stick.addEventListener('pointercancel', endStick);
 
-  dashBtn.addEventListener('pointerdown', (e) => {
+  dashBtn.addEventListener('pointerdown', function (e) {
     e.preventDefault();
     unlockAudio();
     s.input.dash = true;
   });
-  dashBtn.addEventListener('pointerup', () => { s.input.dash = false; });
+  dashBtn.addEventListener('pointerup', function () { s.input.dash = false; });
 
-  window.addEventListener('touchstart', () => {
+  window.addEventListener('touchstart', function () {
     touchRoot.hidden = false;
   }, { once: true, passive: true });
 }
 
 let view = { scale: 1, ox: 0, oy: 0, dpr: 1 };
 
-function fitCanvas(canvas, rw, rh) {
+function fitCanvas(canvas) {
   const wrap = canvas.parentElement;
   const dpr = window.devicePixelRatio || 1;
   const ww = wrap.clientWidth;
@@ -943,35 +1003,49 @@ function fitCanvas(canvas, rw, rh) {
   canvas.width = Math.floor(ww * dpr);
   canvas.height = Math.floor(hh * dpr);
   view.dpr = dpr;
-  view.scale = Math.min(ww / rw, hh / rh);
-  view.ox = (ww - rw * view.scale) / 2;
-  view.oy = (hh - rh * view.scale) / 2;
+  view.scale = Math.min(ww / VIEW_W, hh / VIEW_H);
+  view.ox = (ww - VIEW_W * view.scale) / 2;
+  view.oy = (hh - VIEW_H * view.scale) / 2;
 }
 
-function screenToWorld(canvas, cx, cy) {
+function screenToWorld(canvas, cx, cy, s) {
   const rec = canvas.getBoundingClientRect();
   const x = cx - rec.left;
   const y = cy - rec.top;
+  const canvasX = (x - view.ox) / view.scale;
+  const canvasY = (y - view.oy) / view.scale;
+  const fit = roomFit(s);
   return {
-    x: (x - view.ox) / view.scale,
-    y: (y - view.oy) / view.scale,
+    x: (canvasX - fit.ox) / fit.scale,
+    y: (canvasY - fit.oy) / fit.scale,
   };
 }
 
-function syncHud(s, heartsEl, toastEl, hintEl, roomEl) {
+function syncHud(s, heartsEl, toastEl, roomEl) {
   heartsEl.textContent = '心×' + s.player.hearts;
-  if (roomEl && s.room) roomEl.textContent = s.room.name;
-  if (hintEl && s.room) hintEl.textContent = s.room.hint || NAMES.hint;
-  const hold = s.toast && (s.toastT > 0 || s.cleared || s.dead);
-  if (hold) {
+  if (roomEl) roomEl.textContent = s.roomName || '';
+  if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
-    const extra = (s.cleared || s.dead) ? '  ·  R 再来' : '';
-    toastEl.textContent = s.toast + extra;
-    const big = s.cleared || s.dead;
-    toastEl.className = 'toast ' + (s.toastTone || 'gold') + (big ? ' big' : '');
+    toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
+    toastEl.style.color = s.toastColor || '';
   } else {
     toastEl.hidden = true;
   }
+}
+
+function startLoop(s, canvas, ctx, heartsEl, toastEl, roomEl) {
+  let last = performance.now();
+  function frame(now) {
+    const dt = clamp((now - last) / 1000, 0, 0.033);
+    last = now;
+    update(s, dt);
+    const dpr = view.dpr;
+    ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
+    draw(s, ctx);
+    syncHud(s, heartsEl, toastEl, roomEl);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
 }
 
 function boot() {
@@ -979,56 +1053,68 @@ function boot() {
   const ctx = canvas.getContext('2d');
   const heartsEl = document.getElementById('hearts');
   const toastEl = document.getElementById('toast');
-  const hintEl = document.getElementById('hint');
-  const roomEl = document.getElementById('roomName');
+  const roomEl = document.getElementById('roomName') || document.getElementById('room');
   const stick = document.getElementById('stick');
   const knob = document.getElementById('knob');
   const dashBtn = document.getElementById('dashBtn');
   const touchRoot = document.getElementById('touch');
   const s = makeState();
-  applyRoom(s, 0);
-  bindInput(s, canvas, stick, knob, dashBtn, touchRoot);
-  fitCanvas(canvas, s.roomW, s.roomH);
-  window.addEventListener('resize', () => fitCanvas(canvas, s.roomW, s.roomH));
-  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
-    touchRoot.hidden = false;
+
+  function begin() {
+    ensureRooms();
+    resetRoom(s, 0, false);
+    bindInput(s, canvas, stick, knob, dashBtn, touchRoot);
+    fitCanvas(canvas);
+    window.addEventListener('resize', function () { fitCanvas(canvas); });
+    if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+      touchRoot.hidden = false;
+    }
+    startLoop(s, canvas, ctx, heartsEl, toastEl, roomEl);
   }
 
-  let last = performance.now();
-  function frame(now) {
-    const dt = clamp((now - last) / 1000, 0, 0.033);
-    last = now;
-    update(s, dt);
-    fitCanvas(canvas, s.roomW, s.roomH);
-    const dpr = view.dpr;
-    ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
-    draw(s, ctx);
-    syncHud(s, heartsEl, toastEl, hintEl, roomEl);
-    requestAnimationFrame(frame);
+  function fallback() {
+    ensureRooms();
+    begin();
   }
-  requestAnimationFrame(frame);
-}
 
-function loadRoomsNode() {
-  const fs = require('fs');
-  const path = require('path');
-  const file = path.join(__dirname, '..', 'levels', 'rooms.json');
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (typeof fetch === 'function') {
+    fetch('levels/rooms.json')
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('rooms')); })
+      .then(function (data) {
+        if (!adoptRooms(data)) fallback();
+        else begin();
+      })
+      .catch(fallback);
+  } else {
+    fallback();
+  }
 }
 
 function selfCheck() {
+  ensureRooms();
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
-  if (!ROOM_PACK || !ROOM_PACK.rooms) throw new Error('rooms.json missing');
-  if (ROOM_PACK.rooms.length !== 6) throw new Error('need 6 rooms');
-  for (let i = 0; i < ROOM_NAMES.length; i++) {
-    if (ROOM_PACK.rooms[i].name !== ROOM_NAMES[i]) {
-      throw new Error('room ' + i + ' should be ' + ROOM_NAMES[i]);
+  if (!ROOMS || ROOMS.length !== 6) throw new Error('need 6 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市'];
+  for (let i = 0; i < 6; i++) {
+    if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
+      throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
+    }
+    if (!roomW(ROOMS[i]) || !roomH(ROOMS[i]) || !roomSpawn(ROOMS[i])) {
+      throw new Error('room fields ' + ROOMS[i].name);
     }
   }
-  if (ROOM_PACK.rooms[0].name !== '空场') throw new Error('first room must be 空场');
+
+  const fitJ = roomFit({ roomW: 960, roomH: 140 });
+  if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
+  if (Math.abs(fitJ.ox) > 1e-9) throw new Error('jiadao letterbox x');
+  if (Math.abs(fitJ.oy - 200) > 1e-6) throw new Error('jiadao letterbox y');
+
+  const fitK = roomFit({ roomW: 840, roomH: 480 });
+  if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
   const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙'];
-  const blob = Object.keys(NAMES).map((k) => NAMES[k]).join('');
+  const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
+    Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
     if (blob.indexOf(need[i]) < 0) throw new Error('missing name ' + need[i]);
     if (!/[\u4e00-\u9fff]/.test(need[i])) throw new Error('not Chinese');
@@ -1043,30 +1129,28 @@ function selfCheck() {
     '\u5929\u4f7f',
     '\u6076\u9b54',
   ];
-  const scan = blob + NAMES.hint + ROOM_NAMES.join('') + '尾火过关心核到手通关失败再来';
+  const scan = blob + NAMES.hint + '尾火过关失败通关' + want.join('');
   for (let i = 0; i < banned.length; i++) {
     if (scan.indexOf(banned[i]) >= 0) throw new Error('banned');
   }
 
   const wet = makeState();
-  applyRoom(wet, 2);
-  if (wet.room.name !== '水巷') throw new Error('room 2 水巷');
-  if (wet.waters.length < 1) throw new Error('水巷 should have water');
-  const puddle = wet.waters[0];
-  dropSpark(wet, puddle.x + puddle.w * 0.5, puddle.y + puddle.h * 0.5, false);
+  resetRoom(wet, 0, false);
+  wet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(wet, 120, 120, false);
   if (!wet.sparks[0].wet) throw new Error('spark in water should be wet');
   for (let i = 0; i < 24; i++) update(wet, 0.1);
   if (wet.stats.fizzles < 1) throw new Error('water should fizzle');
   if (wet.stats.booms !== 0) throw new Error('water must not boom');
 
   const dry = makeState();
-  applyRoom(dry, 0);
-  dropSpark(dry, 200, 120, false);
+  resetRoom(dry, 0, false);
+  dropSpark(dry, 120, 120, false);
   for (let i = 0; i < 24; i++) update(dry, 0.1);
   if (dry.stats.booms < 1) throw new Error('dry spark should boom at TAIL_T');
 
   const still = makeState();
-  applyRoom(still, 0);
+  resetRoom(still, 0, false);
   still.input.x = 0;
   still.input.y = 0;
   for (let i = 0; i < 20; i++) update(still, 0.05);
@@ -1075,72 +1159,57 @@ function selfCheck() {
   }
 
   const run = makeState();
-  applyRoom(run, 0);
+  resetRoom(run, 0, false);
   run.input.x = 1;
   run.input.y = 0;
   for (let i = 0; i < 20; i++) update(run, 0.05);
   if (run.stats.drops < 1) throw new Error('moving should drop sparks');
 
-  const burn = makeState();
-  applyRoom(burn, 0);
-  const hearts = burn.player.hearts;
-  dropSpark(burn, burn.player.x, burn.player.y, false);
-  for (let i = 0; i < 24; i++) update(burn, 0.1);
-  if (burn.player.hearts >= hearts) throw new Error('own blast should hurt');
+  const own = makeState();
+  resetRoom(own, 0, false);
+  const hp = own.player.hearts;
+  explode(own, own.player.x, own.player.y, false);
+  if (own.player.hearts !== hp - 1) throw new Error('own blast hurts');
 
-  const seq = makeState();
-  applyRoom(seq, 0);
-  if (seq.room.name !== '空场') throw new Error('boot room 空场');
-  seq.items.push({ kind: 'core', x: seq.player.x, y: seq.player.y, r: 10, taken: false });
-  update(seq, 0.02);
-  if (!seq.won) throw new Error('core should clear room');
-  if (seq.cleared) throw new Error('empty field is not last');
-  for (let i = 0; i < 80; i++) update(seq, 0.05);
-  if (seq.room.name !== '追者') throw new Error('after 心核 go to 追者');
+  const lane = makeState();
+  resetRoom(lane, 4, false);
+  if (lane.roomName !== '夹道' || lane.roomH !== 140) throw new Error('jiadao load');
 
   const last = makeState();
-  applyRoom(last, 5);
-  last.items.push({ kind: 'core', x: last.player.x, y: last.player.y, r: 10, taken: false });
-  update(last, 0.02);
-  if (!last.won || !last.cleared) throw new Error('last room should 通关');
-  if (last.toast !== '通关') throw new Error('last toast 通关');
-  if (last.advanceT > 0) throw new Error('last room must not advance');
+  resetRoom(last, 5, false);
+  if (last.roomName !== '夜市') throw new Error('yeshi load');
+  last.roomIndex = 5;
+  takeCore(last, { x: 100, y: 100 });
+  if (!last.won || last.toast !== TOAST.all) throw new Error('yeshi should 通关');
 
-  for (let i = 0; i < 6; i++) {
-    const probe = makeState();
-    applyRoom(probe, i);
-    if (probe.room.name !== ROOM_NAMES[i]) throw new Error('apply ' + ROOM_NAMES[i]);
-  }
+  const mid = makeState();
+  resetRoom(mid, 0, false);
+  takeCore(mid, { x: 200, y: 200 });
+  if (mid.pendingNext <= 0) throw new Error('core should queue next room');
+  for (let i = 0; i < 20; i++) update(mid, 0.1);
+  if (mid.roomName !== '追者') throw new Error('core advances to 追者');
+
+  if (HITSTOP !== 0.08) throw new Error('hitstop 80ms');
 
   console.log('selfCheck ok', {
-    TAIL_T,
-    rooms: ROOM_NAMES,
-    first: ROOM_PACK.rooms[0].name,
-    names: NAMES,
+    TAIL_T: TAIL_T,
+    rooms: ROOMS.map(function (r) { return r.name; }),
     fizzles: wet.stats.fizzles,
     standDrops: still.stats.drops,
   });
 }
 
-function startBrowser() {
-  fetch('levels/rooms.json').then((res) => {
-    if (!res.ok) throw new Error('rooms.json');
-    return res.json();
-  }).then((data) => {
-    ROOM_PACK = data;
-    boot();
-  }).catch((err) => {
-    console.error(err);
-  });
-}
-
 if (typeof window === 'undefined') {
-  ROOM_PACK = loadRoomsNode();
+  try {
+    if (typeof require === 'function') {
+      global.WEI_HUO_ROOMS = require('./rooms.js');
+    }
+  } catch (e) {}
   selfCheck();
 } else if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startBrowser);
+    document.addEventListener('DOMContentLoaded', boot);
   } else {
-    startBrowser();
+    boot();
   }
 }

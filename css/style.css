@@ -181,3 +181,12 @@ html, body {
   .hud-status { text-align: left; }
   .keys { max-width: 90vw; }
 }
+
+#roomName {
+  display: block;
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--gold);
+}
