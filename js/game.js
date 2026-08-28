@@ -5,6 +5,8 @@ const HASTE_T = 0.55;
 const ECHO_T = 0.45;
 const SPLIT_T = 0.28;
 const SPLIT_D = 80;
+const PIERCE_L = 200;
+const PIERCE_W = 40;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -73,6 +75,7 @@ const NAMES = {
   suck: '吸爆',
   dashBoom: '冲爆',
   split: '裂爆',
+  pierce: '贯爆',
   eater: '拾烬',
 };
 
@@ -132,6 +135,9 @@ const TOAST = {
   splitUse: '裂爆来了',
   splitBoom: '裂开了',
   splitRoom: '裂爆会裂开',
+  pierceGet: '捡到贯爆',
+  pierceUse: '贯爆穿了',
+  pierceRoom: '贯爆会穿箱',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -146,6 +152,7 @@ const COL = {
   suck: '#4ad8c8',
   dashBoom: '#b8ff4a',
   split: '#7ad0ff',
+  pierce: '#ff6ad5',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -224,6 +231,36 @@ function circleRect(cx, cy, cr, rx, ry, rw, rh) {
   const nx = clamp(cx, rx, rx + rw);
   const ny = clamp(cy, ry, ry + rh);
   return dist(cx, cy, nx, ny) <= cr;
+}
+
+function openCrate(s, c) {
+  if (!c || c.open) return false;
+  c.open = true;
+  s.hitstop = Math.max(s.hitstop, hitstopAmt());
+  punch(s, 6);
+  sfx('open');
+  burst(s, c.x + c.w * 0.5, c.y + c.h * 0.5, 8, COL.gold, 120);
+  toast(s, TOAST.crate, 1.1, COL.gold);
+  if (c.loot) {
+    s.items.push({
+      kind: c.loot,
+      x: c.x + c.w * 0.5,
+      y: c.y + c.h * 0.5,
+      r: 10,
+      taken: false,
+    });
+  }
+  return true;
+}
+
+function faceUnit(s) {
+  let fx = s.player.faceX;
+  let fy = s.player.faceY;
+  let fl = Math.hypot(fx, fy);
+  if (fl < 0.001) {
+    return { x: 1, y: 0 };
+  }
+  return { x: fx / fl, y: fy / fl };
 }
 
 function tideHigh(s) {
@@ -337,6 +374,7 @@ function lootKind(drop) {
   if (drop === '吸爆' || drop === 'suck') return 'suck';
   if (drop === '冲爆' || drop === 'dashboom') return 'dashboom';
   if (drop === '裂爆' || drop === 'split') return 'split';
+  if (drop === '贯爆' || drop === 'pierce') return 'pierce';
   return null;
 }
 
@@ -392,10 +430,12 @@ function makeState() {
     suckReady: false,
     dashBoomReady: false,
     splitReady: false,
+    pierceReady: false,
     echoes: [],
     echoing: false,
     splits: [],
     splitting: false,
+    pierces: [],
     watch: false,
     watchSide: 1,
     watchStuckT: 0,
@@ -440,12 +480,15 @@ function resetRoom(s, index, keepHearts) {
   s.suckReady = false;
   s.dashBoomReady = false;
   s.splitReady = false;
+  s.pierceReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
   s.echoes.length = 0;
   if (!s.splits) s.splits = [];
   s.splits.length = 0;
+  if (!s.pierces) s.pierces = [];
+  s.pierces.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -536,6 +579,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '吸廊') toast(s, TOAST.suckRoom, 1.4, COL.suck);
   else if (room.name === '冲廊') toast(s, TOAST.dashBoomRoom, 1.4, COL.dashBoom);
   else if (room.name === '裂廊') toast(s, TOAST.splitRoom, 1.4, COL.split);
+  else if (room.name === '贯廊') toast(s, TOAST.pierceRoom, 1.4, COL.pierce);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -948,22 +992,7 @@ function explode(s, x, y, hot, fused, haste, opts) {
     if (c.open) continue;
     if (c.thick && !seeded) continue;
     if (circleRect(x, y, r, c.x, c.y, c.w, c.h)) {
-      c.open = true;
-      hit = true;
-      s.hitstop = Math.max(s.hitstop, hitstopAmt());
-      punch(s, 6);
-      sfx('open');
-      burst(s, c.x + c.w * 0.5, c.y + c.h * 0.5, 8, COL.gold, 120);
-      toast(s, TOAST.crate, 1.1, COL.gold);
-      if (c.loot) {
-        s.items.push({
-          kind: c.loot,
-          x: c.x + c.w * 0.5,
-          y: c.y + c.h * 0.5,
-          r: 10,
-          taken: false,
-        });
-      }
+      if (openCrate(s, c)) hit = true;
     }
   }
 
@@ -1045,17 +1074,9 @@ function explode(s, x, y, hot, fused, haste, opts) {
   }
   if (s.splitReady) {
     s.splitReady = false;
-    let fx = s.player.faceX;
-    let fy = s.player.faceY;
-    let fl = Math.hypot(fx, fy);
-    if (fl < 0.001) {
-      fx = 1;
-      fy = 0;
-      fl = 1;
-    } else {
-      fx /= fl;
-      fy /= fl;
-    }
+    const face = faceUnit(s);
+    const fx = face.x;
+    const fy = face.y;
     const px = -fy;
     const py = fx;
     const pr = s.player.r || PLAYER_R;
@@ -1105,6 +1126,42 @@ function explode(s, x, y, hot, fused, haste, opts) {
         hot: false,
         split: true,
       });
+    }
+  }
+  if (s.pierceReady) {
+    s.pierceReady = false;
+    const face = faceUnit(s);
+    const fx = face.x;
+    const fy = face.y;
+    const halfW = PIERCE_W * 0.5;
+    for (let i = 0; i < s.crates.length; i++) {
+      const c = s.crates[i];
+      if (c.open || c.thick) continue;
+      const cx = c.x + c.w * 0.5;
+      const cy = c.y + c.h * 0.5;
+      const dx = cx - x;
+      const dy = cy - y;
+      const t = dx * fx + dy * fy;
+      if (t < 0 || t > PIERCE_L) continue;
+      const perp = Math.abs(dx * fy - dy * fx);
+      if (perp > halfW) continue;
+      if (openCrate(s, c)) hit = true;
+    }
+    toast(s, TOAST.pierceUse, 1.1, COL.pierce);
+    if (!reducedMotion()) {
+      punch(s, 9);
+      if (!s.pierces) s.pierces = [];
+      s.pierces.push({
+        x: x, y: y,
+        x2: x + fx * PIERCE_L,
+        y2: y + fy * PIERCE_L,
+        t: 0.28,
+        life: 0.28,
+      });
+      for (let i = 0; i < 4; i++) {
+        const u = (i + 1) / 4;
+        burst(s, x + fx * PIERCE_L * u, y + fy * PIERCE_L * u, i % 2 ? 4 : 3, i % 2 ? COL.pierce : COL.gold, 170);
+      }
     }
   }
 }
@@ -1253,6 +1310,14 @@ function updateRings(s, dt) {
   }
 }
 
+function updatePierces(s, dt) {
+  if (!s.pierces || !s.pierces.length) return;
+  for (let i = s.pierces.length - 1; i >= 0; i--) {
+    s.pierces[i].t -= dt;
+    if (s.pierces[i].t <= 0) s.pierces.splice(i, 1);
+  }
+}
+
 
 function setWatch(s, on) {
   s.watch = !!on;
@@ -1336,6 +1401,7 @@ function watchSteer(s, dt) {
   let suckIt = null;
   let dashBoomIt = null;
   let splitIt = null;
+  let pierceIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -1346,8 +1412,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'suck') suckIt = it;
     if (it.kind === 'dashboom') dashBoomIt = it;
     if (it.kind === 'split') splitIt = it;
+    if (it.kind === 'pierce') pierceIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt);
 
   let guard = null;
   let gd = 1e9;
@@ -1409,6 +1476,10 @@ function watchSteer(s, dt) {
   } else if (!s.splitReady && splitIt) {
     tx = splitIt.x - p.x;
     ty = splitIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.pierceReady && pierceIt) {
+    tx = pierceIt.x - p.x;
+    ty = pierceIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && gd < 150) {
     const orbit = circleAim(p.x, p.y, guard.x, guard.y, 128, side);
@@ -1546,6 +1617,7 @@ function update(s, dt) {
 
   tickTide(s, dt);
   updateRings(s, dt);
+  updatePierces(s, dt);
   updateScorches(s, dt);
 
   if (s.hitstop > 0) {
@@ -1740,6 +1812,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.gold, 130);
       burst(s, it.x, it.y, 4, COL.split, 110);
+      punch(s, 3);
+    } else if (it.kind === 'pierce') {
+      s.pierceReady = true;
+      toast(s, TOAST.pierceGet, 1.1, COL.pierce);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.gold, 130);
+      burst(s, it.x, it.y, 4, COL.pierce, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -1971,6 +2050,28 @@ function draw(s, ctx) {
     ctx.fillText(NAMES.split, e.x, e.y + rad + 12);
   }
 
+  for (let i = 0; i < (s.pierces || []).length; i++) {
+    const beam = s.pierces[i];
+    const k = clamp(beam.t / (beam.life || 0.28), 0, 1);
+    ctx.globalAlpha = 0.28 + 0.55 * k;
+    ctx.strokeStyle = COL.pierce;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = (5.5 + 3.5 * k) / fit.scale;
+    ctx.beginPath();
+    ctx.moveTo(beam.x, beam.y);
+    ctx.lineTo(beam.x2, beam.y2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.16 * k;
+    ctx.lineWidth = (PIERCE_W * 0.42) / fit.scale;
+    ctx.beginPath();
+    ctx.moveTo(beam.x, beam.y);
+    ctx.lineTo(beam.x2, beam.y2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    glow(ctx, beam.x, beam.y, 14 * k, COL.pierce, 0.45 * k);
+    glow(ctx, beam.x2, beam.y2, 12 * k, COL.gold, 0.4 * k);
+  }
+
   for (let i = 0; i < s.rings.length; i++) {
     const ring = s.rings[i];
     let rad;
@@ -2117,6 +2218,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.split, it.x, it.y - 16);
+    } else if (it.kind === 'pierce') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.pierce, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.pierce;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.pierce;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.pierce, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -2394,6 +2510,27 @@ function draw(s, ctx) {
     ctx.arc(lx, ly, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.pierceReady) {
+    let gx;
+    let gy;
+    if (reducedMotion()) {
+      gx = p.x + 12;
+      gy = p.y - 10;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35;
+      gx = p.x + Math.cos(a) * 16;
+      gy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, gx, gy, 8, COL.pierce, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.pierce;
+    ctx.arc(gx, gy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(gx, gy, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -2604,6 +2741,12 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (dashBoomEl && s.splitReady && !s.dashBoomReady) {
     dashBoomEl.textContent = NAMES.split;
   }
+  const pierceEl = (typeof document !== 'undefined') ? document.getElementById('pierce') : null;
+  if (pierceEl) {
+    pierceEl.textContent = s.pierceReady ? NAMES.pierce : '';
+  } else if (splitEl && s.pierceReady && !s.splitReady) {
+    splitEl.textContent = NAMES.pierce;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -2688,10 +2831,12 @@ function selfCheck() {
   if (ECHO_T !== 0.45) throw new Error('ECHO_T 0.45');
   if (SPLIT_T !== 0.28) throw new Error('SPLIT_T 0.28');
   if (SPLIT_D !== 80) throw new Error('SPLIT_D 80');
+  if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
+  if (PIERCE_W !== 40) throw new Error('PIERCE_W 40');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 22) throw new Error('need 22 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊'];
+  if (!ROOMS || ROOMS.length !== 23) throw new Error('need 23 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -2725,6 +2870,8 @@ function selfCheck() {
   if (ROOMS[20].name !== '冲廊') throw new Error('room 21 冲廊');
   if (ROOMS[21].id !== 'lielang') throw new Error('裂廊 id');
   if (ROOMS[21].name !== '裂廊') throw new Error('room 22 裂廊');
+  if (ROOMS[22].id !== 'guanlang') throw new Error('贯廊 id');
+  if (ROOMS[22].name !== '贯廊') throw new Error('room 23 贯廊');
   if (SEED_R !== 72) throw new Error('SEED_R 72');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
@@ -2738,7 +2885,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -2885,10 +3032,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/22') throw new Error('HUD 空场 1/22');
+  if (roomHudText(hud0) !== '空场 · 1/23') throw new Error('HUD 空场 1/23');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/22') throw new Error('HUD 3/22');
+  if (roomHudText(hud2) !== '水巷 · 3/23') throw new Error('HUD 3/23');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -3100,7 +3247,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/22') throw new Error('HUD 灰径 11/22');
+  if (roomHudText(hudAsh) !== '灰径 · 11/23') throw new Error('HUD 灰径 11/23');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -3127,7 +3274,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/22') throw new Error('HUD 环行 12/22');
+  if (roomHudText(hudRing) !== '环行 · 12/23') throw new Error('HUD 环行 12/23');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -3156,7 +3303,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/22') throw new Error('HUD 密线 13/22');
+  if (roomHudText(hudWire) !== '密线 · 13/23') throw new Error('HUD 密线 13/23');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -3472,7 +3619,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/22') throw new Error('HUD 潮廊 14/22');
+  if (roomHudText(hudChao) !== '潮廊 · 14/23') throw new Error('HUD 潮廊 14/23');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -3539,7 +3686,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/22') throw new Error('HUD 种廊 15/22');
+  if (roomHudText(hudZhong) !== '种廊 · 15/23') throw new Error('HUD 种廊 15/23');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -3666,7 +3813,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/22') throw new Error('HUD 油廊 16/22');
+  if (roomHudText(hudYou) !== '油廊 · 16/23') throw new Error('HUD 油廊 16/23');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -3744,7 +3891,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/22') throw new Error('HUD 急廊 17/22');
+  if (roomHudText(hudJi) !== '急廊 · 17/23') throw new Error('HUD 急廊 17/23');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -4067,7 +4214,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/22') throw new Error('HUD 拾廊 18/22');
+  if (roomHudText(hudShi) !== '拾廊 · 18/23') throw new Error('HUD 拾廊 18/23');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -4098,6 +4245,14 @@ function selfCheck() {
   if (TOAST.splitBoom !== '裂开了') throw new Error('裂开了');
   if (TOAST.splitRoom !== '裂爆会裂开') throw new Error('裂爆会裂开');
   if (lootKind('裂爆') !== 'split' || lootKind('split') !== 'split') throw new Error('lootKind 裂爆');
+  if (NAMES.pierce !== '贯爆') throw new Error('贯爆 name');
+  if (COL.pierce !== '#ff6ad5') throw new Error('COL.pierce');
+  if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
+  if (PIERCE_W !== 40) throw new Error('PIERCE_W 40');
+  if (TOAST.pierceGet !== '捡到贯爆') throw new Error('捡到贯爆');
+  if (TOAST.pierceUse !== '贯爆穿了') throw new Error('贯爆穿了');
+  if (TOAST.pierceRoom !== '贯爆会穿箱') throw new Error('贯爆会穿箱');
+  if (lootKind('贯爆') !== 'pierce' || lootKind('pierce') !== 'pierce') throw new Error('lootKind 贯爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -4276,7 +4431,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/22') throw new Error('HUD 响廊 19/22');
+  if (roomHudText(hudXiang) !== '响廊 · 19/23') throw new Error('HUD 响廊 19/23');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -4468,7 +4623,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/22') throw new Error('HUD 吸廊 20/22');
+  if (roomHudText(hudXi) !== '吸廊 · 20/23') throw new Error('HUD 吸廊 20/23');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -4568,6 +4723,7 @@ function selfCheck() {
   dashKeepOthers.echoReady = true;
   dashKeepOthers.suckReady = true;
   dashKeepOthers.splitReady = true;
+  dashKeepOthers.pierceReady = true;
   dashKeepOthers.dashBoomReady = true;
   dashKeepOthers.input.dash = true;
   update(dashKeepOthers, 0.016);
@@ -4577,6 +4733,7 @@ function selfCheck() {
   if (dashKeepOthers.echoReady !== true) throw new Error('冲爆 keeps 回爆');
   if (dashKeepOthers.suckReady !== true) throw new Error('冲爆 keeps 吸爆');
   if (dashKeepOthers.splitReady !== true) throw new Error('冲爆 keeps 裂爆');
+  if (dashKeepOthers.pierceReady !== true) throw new Error('冲爆 keeps 贯爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -4687,7 +4844,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/22') throw new Error('HUD 冲廊 21/22');
+  if (roomHudText(hudChong) !== '冲廊 · 21/23') throw new Error('HUD 冲廊 21/23');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -4798,6 +4955,7 @@ function selfCheck() {
   splitKeepOthers.suckReady = true;
   splitKeepOthers.dashBoomReady = true;
   splitKeepOthers.splitReady = true;
+  splitKeepOthers.pierceReady = true;
   splitKeepOthers.player.faceX = 1;
   splitKeepOthers.player.faceY = 0;
   explode(splitKeepOthers, 400, 220, false);
@@ -4809,6 +4967,7 @@ function selfCheck() {
   if (splitKeepOthers.hasteReady !== true) throw new Error('split does not spend haste');
   if (splitKeepOthers.dashBoomReady !== true) throw new Error('split does not spend 冲爆');
   if (splitKeepOthers.suckReady) throw new Error('split boom spends suck as real boom');
+  if (splitKeepOthers.pierceReady) throw new Error('split boom spends pierce as real boom');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SPLIT_T !== 0.28) throw new Error('SPLIT_T 0.28');
@@ -4922,12 +5081,297 @@ function selfCheck() {
   explode(lie, lBox.x + lBox.w * 0.5, lBox.y - 20, false);
   if (!lBox.open) throw new Error('裂廊 dry trail should open 心核');
   takeCore(lie, { x: 100, y: 100 });
-  if (!lie.won || lie.toast !== TOAST.all) throw new Error('裂廊 should 通关');
+  if (lie.won) throw new Error('裂廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(lie, 0.1);
+  if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/22') throw new Error('HUD 裂廊 22/22');
+  if (roomHudText(hudLie) !== '裂廊 · 22/23') throw new Error('HUD 裂廊 22/23');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+
+  function lineCrate(s, cx, cy, thick) {
+    s.crates.push({
+      x: cx - CRATE * 0.5,
+      y: cy - CRATE * 0.5,
+      w: CRATE,
+      h: CRATE,
+      open: false,
+      loot: null,
+      thick: !!thick,
+    });
+  }
+
+  const pierceDry = makeState();
+  resetRoom(pierceDry, 0, false);
+  lineCrate(pierceDry, 540, 200);
+  lineCrate(pierceDry, 630, 200);
+  lineCrate(pierceDry, 700, 200);
+  pierceDry.pierceReady = true;
+  pierceDry.player.faceX = 1;
+  pierceDry.player.faceY = 0;
+  explode(pierceDry, 500, 200, false);
+  if (pierceDry.pierceReady !== false) throw new Error('pierceReady consumed on boom');
+  if (!pierceDry.crates[pierceDry.crates.length - 3].open
+    || !pierceDry.crates[pierceDry.crates.length - 2].open
+    || !pierceDry.crates[pierceDry.crates.length - 1].open) {
+    throw new Error('pierce opens three line crates');
+  }
+  if (String(pierceDry.toast).indexOf(TOAST.pierceUse) < 0) throw new Error('贯爆穿了');
+
+  const pierceOff = makeState();
+  resetRoom(pierceOff, 0, false);
+  lineCrate(pierceOff, 540, 200);
+  lineCrate(pierceOff, 630, 200);
+  lineCrate(pierceOff, 700, 200);
+  explode(pierceOff, 500, 200, false);
+  const offA = pierceOff.crates[pierceOff.crates.length - 3];
+  const offB = pierceOff.crates[pierceOff.crates.length - 2];
+  const offC = pierceOff.crates[pierceOff.crates.length - 1];
+  if (offB.open || offC.open) throw new Error('BLAST_R misses far line crates');
+  if (offA.open !== circleRect(500, 200, BLAST_R, offA.x, offA.y, offA.w, offA.h)
+    && !offA.open) {
+    throw new Error('near crate may open');
+  }
+  if (offB.open || offC.open) throw new Error('no pierce no far crates');
+
+  const pierceWet = makeState();
+  resetRoom(pierceWet, 0, false);
+  pierceWet.pierceReady = true;
+  pierceWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(pierceWet, 120, 120, false);
+  if (!pierceWet.sparks[0].wet) throw new Error('pierce wet spark');
+  for (let i = 0; i < 24; i++) update(pierceWet, 0.1);
+  if (pierceWet.pierceReady !== true) throw new Error('wet keeps 贯爆');
+  if (pierceWet.stats.booms !== 0) throw new Error('wet pierce no boom');
+
+  const pierceOnce = makeState();
+  resetRoom(pierceOnce, 0, false);
+  lineCrate(pierceOnce, 540, 200);
+  lineCrate(pierceOnce, 630, 200);
+  lineCrate(pierceOnce, 700, 200);
+  pierceOnce.pierceReady = true;
+  pierceOnce.player.faceX = 1;
+  pierceOnce.player.faceY = 0;
+  explode(pierceOnce, 500, 200, false);
+  if (pierceOnce.pierceReady) throw new Error('first boom spends pierce');
+  const onceOpen = pierceOnce.crates.filter(function (c) { return c.open; }).length;
+  explode(pierceOnce, 400, 200, false);
+  const afterOnce = pierceOnce.crates.filter(function (c) { return c.open; }).length;
+  if (afterOnce !== onceOpen) throw new Error('second boom does not pierce');
+  if (pierceOnce.pierceReady) throw new Error('pierce stays spent');
+
+  const pierceKeepDrop = makeState();
+  resetRoom(pierceKeepDrop, 0, false);
+  pierceKeepDrop.pierceReady = true;
+  dropSpark(pierceKeepDrop, 200, 200, false);
+  if (pierceKeepDrop.pierceReady !== true) throw new Error('dropSpark keeps 贯爆');
+  pierceKeepDrop.player.x = 80;
+  pierceKeepDrop.player.y = 80;
+  pierceKeepDrop.input.dash = true;
+  update(pierceKeepDrop, 0.016);
+  if (pierceKeepDrop.pierceReady !== true) throw new Error('dash keeps 贯爆');
+  pierceKeepDrop.player.dashT = 0;
+  pierceKeepDrop.player.dashCd = 0;
+  pierceKeepDrop.hitstop = 0;
+  pierceKeepDrop.dashBoomReady = true;
+  pierceKeepDrop.input.dash = true;
+  update(pierceKeepDrop, 0.016);
+  if (pierceKeepDrop.pierceReady !== true) throw new Error('冲爆 keeps 贯爆');
+  if (pierceKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends');
+
+  const pierceSatKeep = makeState();
+  resetRoom(pierceSatKeep, 0, false);
+  pierceSatKeep.splitReady = true;
+  pierceSatKeep.player.faceX = 1;
+  pierceSatKeep.player.faceY = 0;
+  explode(pierceSatKeep, 400, 200, false);
+  pierceSatKeep.pierceReady = true;
+  pierceSatKeep.echoReady = true;
+  pierceSatKeep.splitReady = true;
+  pierceSatKeep.suckReady = true;
+  pierceSatKeep.seed = 1;
+  for (let i = 0; i < 10; i++) update(pierceSatKeep, 0.05);
+  if (pierceSatKeep.pierceReady !== true) throw new Error('satellite keeps pierce');
+  if (pierceSatKeep.splitReady !== true) throw new Error('satellite keeps split');
+  if (pierceSatKeep.echoReady !== true) throw new Error('satellite keeps echo');
+  if (pierceSatKeep.suckReady !== true) throw new Error('satellite keeps suck');
+  if (pierceSatKeep.seed !== 1) throw new Error('satellite keeps seed');
+
+  const pierceEchoKeep = makeState();
+  resetRoom(pierceEchoKeep, 0, false);
+  pierceEchoKeep.echoReady = true;
+  explode(pierceEchoKeep, 400, 200, false);
+  pierceEchoKeep.pierceReady = true;
+  for (let i = 0; i < 12; i++) update(pierceEchoKeep, 0.05);
+  if (pierceEchoKeep.pierceReady !== true) throw new Error('echo boom keeps pierce');
+
+  const piercePick = makeState();
+  resetRoom(piercePick, 0, false);
+  if (piercePick.pierceReady) throw new Error('pierce starts false');
+  piercePick.items.push({ kind: 'pierce', x: piercePick.player.x, y: piercePick.player.y, r: 10, taken: false });
+  update(piercePick, 0.016);
+  if (piercePick.pierceReady !== true) throw new Error('pick 贯爆');
+  if (piercePick.toast !== TOAST.pierceGet) throw new Error('捡到贯爆');
+
+  const pierceThick = makeState();
+  resetRoom(pierceThick, 0, false);
+  lineCrate(pierceThick, 640, 200, true);
+  pierceThick.pierceReady = true;
+  pierceThick.player.faceX = 1;
+  pierceThick.player.faceY = 0;
+  explode(pierceThick, 500, 200, false);
+  if (pierceThick.crates[pierceThick.crates.length - 1].open) throw new Error('pierce skips thick crate');
+  if (pierceThick.pierceReady) throw new Error('pierce still spends on thick miss');
+
+  const pierceKeepOthers = makeState();
+  resetRoom(pierceKeepOthers, 0, false);
+  pierceKeepOthers.seed = 1;
+  pierceKeepOthers.hasteReady = true;
+  pierceKeepOthers.echoReady = true;
+  pierceKeepOthers.suckReady = true;
+  pierceKeepOthers.dashBoomReady = true;
+  pierceKeepOthers.splitReady = true;
+  pierceKeepOthers.pierceReady = true;
+  pierceKeepOthers.player.faceX = 1;
+  pierceKeepOthers.player.faceY = 0;
+  explode(pierceKeepOthers, 400, 220, false);
+  if (pierceKeepOthers.pierceReady) throw new Error('pierce boom spends pierce');
+  if (pierceKeepOthers.splitReady) throw new Error('pierce boom still queues split');
+  if (pierceKeepOthers.echoReady) throw new Error('pierce boom still queues echo');
+  if (!pierceKeepOthers.echoes || pierceKeepOthers.echoes.length !== 1) throw new Error('pierce boom queues echo');
+  if (!pierceKeepOthers.splits || pierceKeepOthers.splits.length !== 2) throw new Error('pierce boom queues split');
+  if (pierceKeepOthers.seed !== 0) throw new Error('pierce boom is a real boom spends seed');
+  if (pierceKeepOthers.hasteReady !== true) throw new Error('pierce does not spend haste');
+  if (pierceKeepOthers.dashBoomReady !== true) throw new Error('pierce does not spend 冲爆');
+  if (pierceKeepOthers.suckReady) throw new Error('pierce boom spends suck as real boom');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
+  if (PIERCE_W !== 40) throw new Error('PIERCE_W 40');
+
+  const guan = makeState();
+  resetRoom(guan, 22, false);
+  if (guan.roomName !== '贯廊' || guan.roomId !== 'guanlang') throw new Error('guanlang load');
+  if (guan.toast !== TOAST.pierceRoom) throw new Error('贯廊 intro');
+  if (guan.roomW !== 960 || guan.roomH !== 400) throw new Error('贯廊 size');
+  if (guan.player.x !== 80 || guan.player.y !== 200) throw new Error('贯廊 spawn');
+  if (guan.pierceReady) throw new Error('贯廊 pierce starts false');
+  let guanStill = 0;
+  let guanTide = 0;
+  for (let i = 0; i < guan.waters.length; i++) {
+    if (guan.waters[i].tide) guanTide += 1;
+    else guanStill += 1;
+  }
+  if (guanStill < 1) throw new Error('贯廊 needs static 水洼');
+  if (guanTide) throw new Error('贯廊 no tide');
+  let guanCore = 0;
+  let guanHeal = 0;
+  let guanThick = 0;
+  let guanPierceItem = 0;
+  let guanSplitItem = 0;
+  let guanDashItem = 0;
+  let guanSuckItem = 0;
+  let guanEchoItem = 0;
+  let guanHasteItem = 0;
+  let guanSeedItem = 0;
+  for (let i = 0; i < guan.crates.length; i++) {
+    if (guan.crates[i].loot === 'core') guanCore += 1;
+    if (guan.crates[i].loot === 'heal') guanHeal += 1;
+    if (guan.crates[i].thick) guanThick += 1;
+  }
+  for (let i = 0; i < guan.items.length; i++) {
+    if (guan.items[i].kind === 'pierce') guanPierceItem += 1;
+    if (guan.items[i].kind === 'split') guanSplitItem += 1;
+    if (guan.items[i].kind === 'dashboom') guanDashItem += 1;
+    if (guan.items[i].kind === 'suck') guanSuckItem += 1;
+    if (guan.items[i].kind === 'echo') guanEchoItem += 1;
+    if (guan.items[i].kind === 'haste') guanHasteItem += 1;
+    if (guan.items[i].kind === 'seed') guanSeedItem += 1;
+  }
+  if (guanPierceItem < 1) throw new Error('贯廊 needs 贯爆');
+  if (guanSplitItem || guanDashItem || guanSuckItem || guanEchoItem || guanHasteItem || guanSeedItem) {
+    throw new Error('贯廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆');
+  }
+  if (guanCore !== 1) throw new Error('贯廊 心核');
+  if (guanHeal < 1) throw new Error('贯廊 回星');
+  const gBox = guan.crates.find(function (c) { return c.loot === 'core'; });
+  if (!gBox || gBox.thick) throw new Error('贯廊 心核 crate is not thick');
+  if (guanThick) throw new Error('贯廊 no thick crate');
+  let guanHound = 0;
+  let guanGuard = 0;
+  let guanMoth = 0;
+  let guanEater = 0;
+  for (let i = 0; i < guan.enemies.length; i++) {
+    if (isHound(guan.enemies[i])) guanHound += 1;
+    else if (isMoth(guan.enemies[i])) guanMoth += 1;
+    else if (isEater(guan.enemies[i])) guanEater += 1;
+    else guanGuard += 1;
+  }
+  if (guanGuard !== 1 || guanHound !== 0 || guanMoth !== 0 || guanEater !== 0) {
+    throw new Error('贯廊 烬卫 only');
+  }
+  if (inWater(guan, 80, 200) || inOil(guan, 80, 200)) throw new Error('贯廊 spawn dry');
+  if (inWater(guan, 280, 200) || inOil(guan, 280, 200)) throw new Error('贯廊 贯爆 dry');
+  if (inOil(guan, 860, 188) || inWater(guan, 860, 188)) throw new Error('贯廊 core dry');
+  if (!inWater(guan, 450, 350)) throw new Error('贯廊 wet bag');
+  if (inWater(guan, 400, 100)) throw new Error('贯廊 north shelf wet');
+  for (let i = 0; i < guan.crates.length; i++) {
+    const c = guan.crates[i];
+    if (circleRect(guan.player.x, guan.player.y, guan.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('贯廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 480; x += 10) {
+    for (let i = 0; i < guan.crates.length; i++) {
+      const c = guan.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('贯廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 480; x += 20) {
+    for (let y = 80; y <= 120; y += 20) {
+      if (inWater(guan, x, y)) throw new Error('贯廊 north puddle');
+      for (let i = 0; i < guan.enemies.length; i++) {
+        const e = guan.enemies[i];
+        if (dist(e.x, e.y, x, y) < e.r + 8) throw new Error('贯廊 north enemy');
+      }
+    }
+  }
+  const gLine = guan.crates.filter(function (c) {
+    const cy = c.y + c.h * 0.5;
+    return Math.abs(cy - 200) < 8 && !c.loot;
+  });
+  if (gLine.length < 3) throw new Error('贯廊 three-crate line');
+  gLine.sort(function (a, b) { return a.x - b.x; });
+  for (let i = 1; i < gLine.length; i++) {
+    const ax = gLine[i - 1].x + gLine[i - 1].w * 0.5;
+    const bx = gLine[i].x + gLine[i].w * 0.5;
+    if (bx - ax < 70) throw new Error('贯廊 crate line |Δx| >= 70');
+  }
+  explode(guan, 500, 200, false);
+  if (!gLine[0].open) throw new Error('贯廊 plant opens crate A');
+  if (gLine[1].open || gLine[2].open) throw new Error('贯廊 BLAST_R misses B/C');
+  guan.pierceReady = true;
+  guan.player.faceX = 1;
+  guan.player.faceY = 0;
+  explode(guan, 500, 200, false);
+  if (!gLine[0].open || !gLine[1].open || !gLine[2].open) throw new Error('贯廊 pierce opens line');
+  explode(guan, gBox.x + gBox.w * 0.5, gBox.y - 20, false);
+  if (!gBox.open) throw new Error('贯廊 dry trail should open 心核');
+  takeCore(guan, { x: 100, y: 100 });
+  if (!guan.won || guan.toast !== TOAST.all) throw new Error('贯廊 should 通关');
+  const hudGuan = makeState();
+  resetRoom(hudGuan, 22, false);
+  if (roomHudText(hudGuan) !== '贯廊 · 23/23') throw new Error('HUD 贯廊 23/23');
+  const hudChong23 = makeState();
+  resetRoom(hudChong23, 20, false);
+  if (roomHudText(hudChong23) !== '冲廊 · 21/23') throw new Error('HUD 冲廊 21/23');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
+  if (PIERCE_W !== 40) throw new Error('PIERCE_W 40');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
