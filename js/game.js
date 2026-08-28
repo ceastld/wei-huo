@@ -9,6 +9,7 @@ const PIERCE_L = 200;
 const PIERCE_W = 40;
 const RING_IN = 40;
 const RING_OUT = 80;
+const FROST_T = 1.8;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -79,6 +80,7 @@ const NAMES = {
   split: '裂爆',
   pierce: '贯爆',
   halo: '环爆',
+  frost: '霜爆',
   eater: '拾烬',
 };
 
@@ -144,6 +146,9 @@ const TOAST = {
   haloGet: '捡到环爆',
   haloUse: '炸成圈了',
   haloRoom: '环爆是空心',
+  frostGet: '捡到霜爆',
+  frostUse: '冻住了',
+  frostRoom: '霜爆会冻住',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -160,6 +165,7 @@ const COL = {
   split: '#7ad0ff',
   pierce: '#ff6ad5',
   halo: '#9a7aff',
+  frost: '#9ef0ff',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -383,6 +389,7 @@ function lootKind(drop) {
   if (drop === '裂爆' || drop === 'split') return 'split';
   if (drop === '贯爆' || drop === 'pierce') return 'pierce';
   if (drop === '环爆' || drop === 'halo') return 'halo';
+  if (drop === '霜爆' || drop === 'frost') return 'frost';
   return null;
 }
 
@@ -440,6 +447,7 @@ function makeState() {
     splitReady: false,
     pierceReady: false,
     haloReady: false,
+    frostReady: false,
     echoes: [],
     echoing: false,
     splits: [],
@@ -492,6 +500,7 @@ function resetRoom(s, index, keepHearts) {
   s.splitReady = false;
   s.pierceReady = false;
   s.haloReady = false;
+  s.frostReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -569,6 +578,7 @@ function resetRoom(s, index, keepHearts) {
       r: moth ? MOTH_R : (eater ? EATER_R : (hound ? 12 : ENEMY_R)),
       hp: moth ? MOTH_HP : (eater ? EATER_HP : (hound ? HOUND_HP : ENEMY_HP)),
       hitT: 0,
+      frostT: 0,
       kind: kind,
       faceX: 1,
       faceY: 0,
@@ -594,6 +604,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '裂廊') toast(s, TOAST.splitRoom, 1.4, COL.split);
   else if (room.name === '贯廊') toast(s, TOAST.pierceRoom, 1.4, COL.pierce);
   else if (room.name === '晕廊') toast(s, TOAST.haloRoom, 1.4, COL.halo);
+  else if (room.name === '冻廊') toast(s, TOAST.frostRoom, 1.4, COL.frost);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -984,6 +995,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
     s.haloReady = false;
     halo = true;
   }
+  let frost = false;
+  if (!forked && s.frostReady) {
+    s.frostReady = false;
+    frost = true;
+  }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
   s.lastBoomX = x;
@@ -1022,6 +1038,13 @@ function explode(s, x, y, hot, fused, haste, opts) {
       s.hitstop = Math.max(s.hitstop, hitstopAmt());
       punch(s, 6);
       hit = true;
+      if (frost) {
+        e.frostT = FROST_T;
+        if (!reducedMotion()) {
+          burst(s, e.x, e.y, 6, COL.frost, 170);
+          burst(s, e.x, e.y, 4, COL.gold, 160);
+        }
+      }
       if (e.hp <= 0) foeDown(s, e);
     }
   }
@@ -1228,6 +1251,10 @@ function explode(s, x, y, hot, fused, haste, opts) {
         burst(s, x + Math.cos(a) * mid, y + Math.sin(a) * mid, i % 2 ? 3 : 2, i % 2 ? COL.halo : COL.gold, 170);
       }
     }
+  }
+  if (frost) {
+    toast(s, TOAST.frostUse, 1.1, COL.frost);
+    if (!reducedMotion()) punch(s, 8);
   }
 }
 
@@ -1476,6 +1503,7 @@ function watchSteer(s, dt) {
   let splitIt = null;
   let pierceIt = null;
   let haloIt = null;
+  let frostIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -1488,8 +1516,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'split') splitIt = it;
     if (it.kind === 'pierce') pierceIt = it;
     if (it.kind === 'halo') haloIt = it;
+    if (it.kind === 'frost') frostIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt);
 
   let guard = null;
   let gd = 1e9;
@@ -1559,6 +1588,10 @@ function watchSteer(s, dt) {
   } else if (!s.haloReady && haloIt) {
     tx = haloIt.x - p.x;
     ty = haloIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.frostReady && frostIt) {
+    tx = frostIt.x - p.x;
+    ty = frostIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && gd < 150) {
     const orbit = circleAim(p.x, p.y, guard.x, guard.y, 128, side);
@@ -1831,18 +1864,23 @@ function update(s, dt) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     if (e.hitT > 0) e.hitT -= dt;
-    if (isHound(e)) updateHound(s, e, dt);
-    else if (isMoth(e)) updateMoth(s, e, dt);
-    else if (isEater(e)) updateEater(s, e, dt);
-    else {
-      const d = dist(e.x, e.y, p.x, p.y) || 1;
-      e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
-      e.y += ((p.y - e.y) / d) * ENEMY_SPEED * dt;
+    if (e.frostT > 0) e.frostT -= dt;
+    if (!(e.frostT > 0)) {
+      if (isHound(e)) updateHound(s, e, dt);
+      else if (isMoth(e)) updateMoth(s, e, dt);
+      else if (isEater(e)) updateEater(s, e, dt);
+      else {
+        const d = dist(e.x, e.y, p.x, p.y) || 1;
+        e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
+        e.y += ((p.y - e.y) / d) * ENEMY_SPEED * dt;
+      }
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, e.x + (Math.random() - 0.5) * 10, e.y - 6 - Math.random() * 8, 1, COL.frost, 40);
     }
     resolveCrates(s, e);
     e.x = clamp(e.x, e.r, rw - e.r);
     e.y = clamp(e.y, e.r, rh - e.r);
-    if (dist(e.x, e.y, p.x, p.y) < e.r + p.r - 1) hurtPlayer(s, e.x, e.y, 'bump');
+    if (!(e.frostT > 0) && dist(e.x, e.y, p.x, p.y) < e.r + p.r - 1) hurtPlayer(s, e.x, e.y, 'bump');
   }
 
   for (let i = 0; i < s.items.length; i++) {
@@ -1906,6 +1944,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.gold, 130);
       burst(s, it.x, it.y, 4, COL.halo, 110);
+      punch(s, 3);
+    } else if (it.kind === 'frost') {
+      s.frostReady = true;
+      toast(s, TOAST.frostGet, 1.1, COL.frost);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.gold, 130);
+      burst(s, it.x, it.y, 4, COL.frost, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -2358,6 +2403,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.halo, it.x, it.y - 16);
+    } else if (it.kind === 'frost') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.frost, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.frost;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.frost;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.frost, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -2375,6 +2435,16 @@ function draw(s, ctx) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     const flash = e.hitT > 0;
+    if (e.frostT > 0) {
+      glow(ctx, e.x, e.y, e.r + 12, COL.frost, reducedMotion() ? 0.1 : 0.38);
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = COL.frost;
+      ctx.lineWidth = 1.8 / fit.scale;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r + 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
     if (isHound(e)) {
       glow(ctx, e.x, e.y, 24, COL.gold, 0.22);
       ctx.save();
@@ -2470,14 +2540,25 @@ function draw(s, ctx) {
       }
       continue;
     }
-    glow(ctx, e.x, e.y, 22, COL.ember, 0.18);
+    const iced = e.frostT > 0;
+    if (iced) glow(ctx, e.x, e.y, 26, COL.frost, reducedMotion() ? 0.12 : 0.42);
+    glow(ctx, e.x, e.y, 22, iced ? COL.frost : COL.ember, iced ? 0.28 : 0.18);
     ctx.beginPath();
-    ctx.fillStyle = flash ? COL.gold : '#2a1410';
+    ctx.fillStyle = flash ? COL.gold : (iced ? mixHex('#2a1410', COL.frost, 0.55) : '#2a1410');
     ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = COL.ember;
-    ctx.lineWidth = 2 / fit.scale;
+    ctx.strokeStyle = iced ? COL.frost : COL.ember;
+    ctx.lineWidth = (iced ? 2.6 : 2) / fit.scale;
     ctx.stroke();
+    if (iced) {
+      ctx.globalAlpha = 0.55;
+      ctx.beginPath();
+      ctx.strokeStyle = COL.frost;
+      ctx.lineWidth = 1.4 / fit.scale;
+      ctx.arc(e.x, e.y, e.r + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
     ctx.fillStyle = COL.ember;
     ctx.beginPath();
     ctx.arc(e.x - 4, e.y - 3, 2, 0, Math.PI * 2);
@@ -2675,6 +2756,27 @@ function draw(s, ctx) {
     ctx.beginPath();
     ctx.fillStyle = COL.gold;
     ctx.arc(hx, hy, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (s.frostReady) {
+    let fx;
+    let fy;
+    if (reducedMotion()) {
+      fx = p.x - 12;
+      fy = p.y + 10;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7;
+      fx = p.x + Math.cos(a) * 16;
+      fy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, fx, fy, 8, COL.frost, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.frost;
+    ctx.arc(fx, fy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(fx, fy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -2899,6 +3001,12 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (pierceEl && s.haloReady && !s.pierceReady) {
     pierceEl.textContent = NAMES.halo;
   }
+  const frostEl = (typeof document !== 'undefined') ? document.getElementById('frost') : null;
+  if (frostEl) {
+    frostEl.textContent = s.frostReady ? NAMES.frost : '';
+  } else if (haloEl && s.frostReady && !s.haloReady) {
+    haloEl.textContent = NAMES.frost;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -2987,10 +3095,11 @@ function selfCheck() {
   if (PIERCE_W !== 40) throw new Error('PIERCE_W 40');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
   if (RING_OUT !== 80) throw new Error('RING_OUT 80');
+  if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 24) throw new Error('need 24 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊'];
+  if (!ROOMS || ROOMS.length !== 25) throw new Error('need 25 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -3028,6 +3137,8 @@ function selfCheck() {
   if (ROOMS[22].name !== '贯廊') throw new Error('room 23 贯廊');
   if (ROOMS[23].id !== 'yunlang') throw new Error('晕廊 id');
   if (ROOMS[23].name !== '晕廊') throw new Error('room 24 晕廊');
+  if (ROOMS[24].id !== 'donglang') throw new Error('冻廊 id');
+  if (ROOMS[24].name !== '冻廊') throw new Error('room 25 冻廊');
   if (SEED_R !== 72) throw new Error('SEED_R 72');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
@@ -3041,7 +3152,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -3188,10 +3299,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/24') throw new Error('HUD 空场 1/24');
+  if (roomHudText(hud0) !== '空场 · 1/25') throw new Error('HUD 空场 1/25');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/24') throw new Error('HUD 3/24');
+  if (roomHudText(hud2) !== '水巷 · 3/25') throw new Error('HUD 3/25');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -3403,7 +3514,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/24') throw new Error('HUD 灰径 11/24');
+  if (roomHudText(hudAsh) !== '灰径 · 11/25') throw new Error('HUD 灰径 11/25');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -3430,7 +3541,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/24') throw new Error('HUD 环行 12/24');
+  if (roomHudText(hudRing) !== '环行 · 12/25') throw new Error('HUD 环行 12/25');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -3459,7 +3570,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/24') throw new Error('HUD 密线 13/24');
+  if (roomHudText(hudWire) !== '密线 · 13/25') throw new Error('HUD 密线 13/25');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -3775,7 +3886,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/24') throw new Error('HUD 潮廊 14/24');
+  if (roomHudText(hudChao) !== '潮廊 · 14/25') throw new Error('HUD 潮廊 14/25');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -3842,7 +3953,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/24') throw new Error('HUD 种廊 15/24');
+  if (roomHudText(hudZhong) !== '种廊 · 15/25') throw new Error('HUD 种廊 15/25');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -3969,7 +4080,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/24') throw new Error('HUD 油廊 16/24');
+  if (roomHudText(hudYou) !== '油廊 · 16/25') throw new Error('HUD 油廊 16/25');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -4047,7 +4158,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/24') throw new Error('HUD 急廊 17/24');
+  if (roomHudText(hudJi) !== '急廊 · 17/25') throw new Error('HUD 急廊 17/25');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -4370,7 +4481,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/24') throw new Error('HUD 拾廊 18/24');
+  if (roomHudText(hudShi) !== '拾廊 · 18/25') throw new Error('HUD 拾廊 18/25');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -4417,6 +4528,13 @@ function selfCheck() {
   if (TOAST.haloUse !== '炸成圈了') throw new Error('炸成圈了');
   if (TOAST.haloRoom !== '环爆是空心') throw new Error('环爆是空心');
   if (lootKind('环爆') !== 'halo' || lootKind('halo') !== 'halo') throw new Error('lootKind 环爆');
+  if (NAMES.frost !== '霜爆') throw new Error('霜爆 name');
+  if (COL.frost !== '#9ef0ff') throw new Error('COL.frost');
+  if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
+  if (TOAST.frostGet !== '捡到霜爆') throw new Error('捡到霜爆');
+  if (TOAST.frostUse !== '冻住了') throw new Error('冻住了');
+  if (TOAST.frostRoom !== '霜爆会冻住') throw new Error('霜爆会冻住');
+  if (lootKind('霜爆') !== 'frost' || lootKind('frost') !== 'frost') throw new Error('lootKind 霜爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -4595,7 +4713,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/24') throw new Error('HUD 响廊 19/24');
+  if (roomHudText(hudXiang) !== '响廊 · 19/25') throw new Error('HUD 响廊 19/25');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -4787,7 +4905,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/24') throw new Error('HUD 吸廊 20/24');
+  if (roomHudText(hudXi) !== '吸廊 · 20/25') throw new Error('HUD 吸廊 20/25');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -5008,7 +5126,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/24') throw new Error('HUD 冲廊 21/24');
+  if (roomHudText(hudChong) !== '冲廊 · 21/25') throw new Error('HUD 冲廊 21/25');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -5250,7 +5368,7 @@ function selfCheck() {
   if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/24') throw new Error('HUD 裂廊 22/24');
+  if (roomHudText(hudLie) !== '裂廊 · 22/25') throw new Error('HUD 裂廊 22/25');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -5530,10 +5648,10 @@ function selfCheck() {
   if (guan.roomName !== '晕廊') throw new Error('core advances to 晕廊');
   const hudGuan = makeState();
   resetRoom(hudGuan, 22, false);
-  if (roomHudText(hudGuan) !== '贯廊 · 23/24') throw new Error('HUD 贯廊 23/24');
+  if (roomHudText(hudGuan) !== '贯廊 · 23/25') throw new Error('HUD 贯廊 23/25');
   const hudChong23 = makeState();
   resetRoom(hudChong23, 20, false);
-  if (roomHudText(hudChong23) !== '冲廊 · 21/24') throw new Error('HUD 冲廊 21/24');
+  if (roomHudText(hudChong23) !== '冲廊 · 21/25') throw new Error('HUD 冲廊 21/25');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
@@ -5684,6 +5802,139 @@ function selfCheck() {
   if (haloThick.crates[haloThick.crates.length - 1].open) throw new Error('halo skips thick crate');
   if (haloThick.haloReady) throw new Error('halo still spends on thick miss');
 
+  function testFoe(x, y) {
+    return {
+      x: x, y: y, r: ENEMY_R, hp: ENEMY_HP, hitT: 0, frostT: 0,
+      kind: NAMES.enemy, faceX: 1, faceY: 0, flutter: 0,
+    };
+  }
+
+  const frostOn = makeState();
+  resetRoom(frostOn, 0, false);
+  frostOn.enemies.push(testFoe(500, 200));
+  frostOn.frostReady = true;
+  frostOn.dashBoomReady = true;
+  frostOn.hasteReady = true;
+  explode(frostOn, 500, 200, false);
+  if (frostOn.frostReady !== false) throw new Error('frostReady consumed on boom');
+  if (!(frostOn.enemies[0].frostT > 0)) throw new Error('frost sets frostT');
+  if (Math.abs(frostOn.enemies[0].frostT - FROST_T) > 1e-9) throw new Error('frostT is FROST_T');
+  if (frostOn.enemies[0].hp !== ENEMY_HP - 1) throw new Error('frost still damages');
+  if (frostOn.toast !== TOAST.frostUse) throw new Error('冻住了');
+  if (frostOn.dashBoomReady !== true) throw new Error('frost boom keeps 冲爆');
+  if (frostOn.hasteReady !== true) throw new Error('frost boom keeps 急燃');
+
+  const frostFar = makeState();
+  resetRoom(frostFar, 0, false);
+  frostFar.enemies.push(testFoe(800, 200));
+  frostFar.frostReady = true;
+  explode(frostFar, 100, 100, false);
+  if (frostFar.frostReady) throw new Error('first boom spends frost');
+  if (frostFar.enemies[0].frostT > 0) throw new Error('miss does not freeze');
+  if (frostFar.toast !== TOAST.frostUse) throw new Error('冻住了 even on miss');
+  explode(frostFar, 800, 200, false);
+  if (frostFar.enemies[0].frostT > 0) throw new Error('second boom is not frost');
+
+  const frostWet = makeState();
+  resetRoom(frostWet, 0, false);
+  frostWet.frostReady = true;
+  frostWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(frostWet, 120, 120, false);
+  if (!frostWet.sparks[0].wet) throw new Error('frost wet spark');
+  for (let i = 0; i < 24; i++) update(frostWet, 0.1);
+  if (frostWet.frostReady !== true) throw new Error('wet keeps 霜爆');
+  if (frostWet.stats.booms !== 0) throw new Error('wet frost no boom');
+
+  const frostKeepDrop = makeState();
+  resetRoom(frostKeepDrop, 0, false);
+  frostKeepDrop.frostReady = true;
+  dropSpark(frostKeepDrop, 200, 200, false);
+  if (frostKeepDrop.frostReady !== true) throw new Error('dropSpark keeps 霜爆');
+  frostKeepDrop.player.x = 80;
+  frostKeepDrop.player.y = 80;
+  frostKeepDrop.input.dash = true;
+  update(frostKeepDrop, 0.016);
+  if (frostKeepDrop.frostReady !== true) throw new Error('dash keeps 霜爆');
+  frostKeepDrop.player.dashT = 0;
+  frostKeepDrop.player.dashCd = 0;
+  frostKeepDrop.hitstop = 0;
+  frostKeepDrop.dashBoomReady = true;
+  frostKeepDrop.input.dash = true;
+  update(frostKeepDrop, 0.016);
+  if (frostKeepDrop.frostReady !== true) throw new Error('冲爆 keeps 霜爆');
+  if (frostKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends');
+
+  const frostSatKeep = makeState();
+  resetRoom(frostSatKeep, 0, false);
+  frostSatKeep.enemies.push(testFoe(400, 280));
+  frostSatKeep.splitReady = true;
+  frostSatKeep.player.faceX = 1;
+  frostSatKeep.player.faceY = 0;
+  explode(frostSatKeep, 400, 200, false);
+  frostSatKeep.frostReady = true;
+  frostSatKeep.echoReady = true;
+  frostSatKeep.splitReady = true;
+  frostSatKeep.suckReady = true;
+  frostSatKeep.seed = 1;
+  frostSatKeep.haloReady = true;
+  frostSatKeep.pierceReady = true;
+  for (let i = 0; i < 10; i++) update(frostSatKeep, 0.05);
+  if (frostSatKeep.frostReady !== true) throw new Error('satellite keeps frost');
+  if (frostSatKeep.enemies[0].frostT > 0) throw new Error('satellite does not apply frost');
+  if (frostSatKeep.splitReady !== true) throw new Error('satellite keeps split with frost');
+  if (frostSatKeep.echoReady !== true) throw new Error('satellite keeps echo with frost');
+  if (frostSatKeep.suckReady !== true) throw new Error('satellite keeps suck with frost');
+  if (frostSatKeep.seed !== 1) throw new Error('satellite keeps seed with frost');
+  if (frostSatKeep.haloReady !== true) throw new Error('satellite keeps halo with frost');
+  if (frostSatKeep.pierceReady !== true) throw new Error('satellite keeps pierce with frost');
+
+  const frostEchoKeep = makeState();
+  resetRoom(frostEchoKeep, 0, false);
+  frostEchoKeep.enemies.push(testFoe(400, 200));
+  frostEchoKeep.echoReady = true;
+  explode(frostEchoKeep, 400, 200, false);
+  frostEchoKeep.frostReady = true;
+  frostEchoKeep.enemies[0].frostT = 0;
+  for (let i = 0; i < 12; i++) update(frostEchoKeep, 0.05);
+  if (frostEchoKeep.frostReady !== true) throw new Error('echo boom keeps frost');
+  if (frostEchoKeep.enemies[0].frostT > 0) throw new Error('echo boom does not apply frost');
+
+  const frostPick = makeState();
+  resetRoom(frostPick, 0, false);
+  if (frostPick.frostReady) throw new Error('frost starts false');
+  frostPick.items.push({ kind: 'frost', x: frostPick.player.x, y: frostPick.player.y, r: 10, taken: false });
+  update(frostPick, 0.016);
+  if (frostPick.frostReady !== true) throw new Error('pick 霜爆');
+  if (frostPick.toast !== TOAST.frostGet) throw new Error('捡到霜爆 pick');
+
+  const frostBump = makeState();
+  resetRoom(frostBump, 0, false);
+  frostBump.enemies.push(testFoe(400, 200));
+  frostBump.frostReady = true;
+  frostBump.player.x = 80;
+  frostBump.player.y = 80;
+  explode(frostBump, 400, 200, false);
+  if (!(frostBump.enemies[0].frostT > 0)) throw new Error('frost bump setup');
+  frostBump.player.x = frostBump.enemies[0].x;
+  frostBump.player.y = frostBump.enemies[0].y;
+  frostBump.player.hearts = 3;
+  frostBump.player.inv = 0;
+  frostBump.player.dashT = 0;
+  update(frostBump, 0.016);
+  if (frostBump.player.hearts !== 3) throw new Error('frosted guard does not bump');
+  frostBump.player.x = 80;
+  frostBump.player.y = 80;
+  frostBump.player.inv = 0;
+  for (let i = 0; i < 20; i++) update(frostBump, 0.1);
+  if (frostBump.enemies[0].frostT > 0) throw new Error('frost expires');
+  frostBump.player.x = frostBump.enemies[0].x;
+  frostBump.player.y = frostBump.enemies[0].y;
+  frostBump.player.hearts = 3;
+  frostBump.player.inv = 0;
+  frostBump.player.dashT = 0;
+  update(frostBump, 0.016);
+  if (frostBump.player.hearts >= 3) throw new Error('after frost bump hurts');
+
   const yun = makeState();
   resetRoom(yun, 23, false);
   if (yun.roomName !== '晕廊' || yun.roomId !== 'yunlang') throw new Error('yunlang load');
@@ -5798,17 +6049,157 @@ function selfCheck() {
   explode(yun, yunBox.x + yunBox.w * 0.5, yunBox.y - 20, false);
   if (!yunBox.open) throw new Error('晕廊 dry trail should open 心核');
   takeCore(yun, { x: 100, y: 100 });
-  if (!yun.won || yun.toast !== TOAST.all) throw new Error('晕廊 should 通关');
+  if (yun.won) throw new Error('晕廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(yun, 0.1);
+  if (yun.roomName !== '冻廊') throw new Error('core advances to 冻廊');
   const hudYun = makeState();
   resetRoom(hudYun, 23, false);
-  if (roomHudText(hudYun) !== '晕廊 · 24/24') throw new Error('HUD 晕廊 24/24');
+  if (roomHudText(hudYun) !== '晕廊 · 24/25') throw new Error('HUD 晕廊 24/25');
   const hudLie24 = makeState();
   resetRoom(hudLie24, 21, false);
-  if (roomHudText(hudLie24) !== '裂廊 · 22/24') throw new Error('HUD 裂廊 22/24');
+  if (roomHudText(hudLie24) !== '裂廊 · 22/25') throw new Error('HUD 裂廊 22/25');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
   if (RING_OUT !== 80) throw new Error('RING_OUT 80');
+
+  const dong = makeState();
+  resetRoom(dong, 24, false);
+  if (dong.roomName !== '冻廊' || dong.roomId !== 'donglang') throw new Error('donglang load');
+  if (dong.toast !== TOAST.frostRoom) throw new Error('冻廊 intro');
+  if (dong.roomW !== 960 || dong.roomH !== 400) throw new Error('冻廊 size');
+  if (dong.player.x !== 80 || dong.player.y !== 200) throw new Error('冻廊 spawn');
+  if (dong.frostReady) throw new Error('冻廊 frost starts false');
+  let dongStill = 0;
+  let dongTide = 0;
+  for (let i = 0; i < dong.waters.length; i++) {
+    if (dong.waters[i].tide) dongTide += 1;
+    else dongStill += 1;
+  }
+  if (dongStill < 1) throw new Error('冻廊 needs static 水洼');
+  if (dongTide) throw new Error('冻廊 no tide');
+  let dongCore = 0;
+  let dongHeal = 0;
+  let dongThick = 0;
+  let dongFrostItem = 0;
+  let dongHaloItem = 0;
+  let dongPierceItem = 0;
+  let dongSplitItem = 0;
+  let dongDashItem = 0;
+  let dongSuckItem = 0;
+  let dongEchoItem = 0;
+  let dongHasteItem = 0;
+  let dongSeedItem = 0;
+  for (let i = 0; i < dong.crates.length; i++) {
+    if (dong.crates[i].loot === 'core') dongCore += 1;
+    if (dong.crates[i].loot === 'heal') dongHeal += 1;
+    if (dong.crates[i].thick) dongThick += 1;
+  }
+  for (let i = 0; i < dong.items.length; i++) {
+    if (dong.items[i].kind === 'frost') dongFrostItem += 1;
+    if (dong.items[i].kind === 'halo') dongHaloItem += 1;
+    if (dong.items[i].kind === 'pierce') dongPierceItem += 1;
+    if (dong.items[i].kind === 'split') dongSplitItem += 1;
+    if (dong.items[i].kind === 'dashboom') dongDashItem += 1;
+    if (dong.items[i].kind === 'suck') dongSuckItem += 1;
+    if (dong.items[i].kind === 'echo') dongEchoItem += 1;
+    if (dong.items[i].kind === 'haste') dongHasteItem += 1;
+    if (dong.items[i].kind === 'seed') dongSeedItem += 1;
+  }
+  if (dongFrostItem < 1) throw new Error('冻廊 needs 霜爆');
+  if (dongHaloItem || dongPierceItem || dongSplitItem || dongDashItem || dongSuckItem || dongEchoItem || dongHasteItem || dongSeedItem) {
+    throw new Error('冻廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆');
+  }
+  if (dongCore !== 1) throw new Error('冻廊 心核');
+  if (dongHeal < 1) throw new Error('冻廊 回星');
+  const dongBox = dong.crates.find(function (c) { return c.loot === 'core'; });
+  if (!dongBox || dongBox.thick) throw new Error('冻廊 心核 crate is not thick');
+  if (dongThick) throw new Error('冻廊 no thick crate');
+  let dongHound = 0;
+  let dongGuard = 0;
+  let dongMoth = 0;
+  let dongEater = 0;
+  for (let i = 0; i < dong.enemies.length; i++) {
+    if (isHound(dong.enemies[i])) dongHound += 1;
+    else if (isMoth(dong.enemies[i])) dongMoth += 1;
+    else if (isEater(dong.enemies[i])) dongEater += 1;
+    else dongGuard += 1;
+  }
+  if (dongGuard !== 2 || dongHound !== 0 || dongMoth !== 0 || dongEater !== 0) {
+    throw new Error('冻廊 烬卫 only');
+  }
+  if (inWater(dong, 80, 200) || inOil(dong, 80, 200)) throw new Error('冻廊 spawn dry');
+  if (inWater(dong, 260, 200) || inOil(dong, 260, 200)) throw new Error('冻廊 霜爆 dry');
+  if (inOil(dong, 860, 188) || inWater(dong, 860, 188)) throw new Error('冻廊 core dry');
+  if (inWater(dong, 480, 200) || inOil(dong, 480, 200)) throw new Error('冻廊 plant dry');
+  if (!inWater(dong, 450, 350)) throw new Error('冻廊 wet bag');
+  if (inWater(dong, 400, 100)) throw new Error('冻廊 north shelf wet');
+  for (let i = 0; i < dong.crates.length; i++) {
+    const c = dong.crates[i];
+    if (circleRect(dong.player.x, dong.player.y, dong.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('冻廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 420; x += 10) {
+    for (let i = 0; i < dong.crates.length; i++) {
+      const c = dong.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('冻廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 480; x += 20) {
+    for (let y = 80; y <= 120; y += 20) {
+      if (inWater(dong, x, y)) throw new Error('冻廊 north puddle');
+      for (let i = 0; i < dong.enemies.length; i++) {
+        const e = dong.enemies[i];
+        if (dist(e.x, e.y, x, y) < e.r + 8) throw new Error('冻廊 north enemy');
+      }
+    }
+  }
+  for (let i = 0; i < dong.enemies.length; i++) {
+    const e = dong.enemies[i];
+    if (dist(e.x, e.y, 480, 200) > BLAST_R + e.r) throw new Error('BLAST_R at plant hits both guards');
+  }
+  dong.player.x = 80;
+  dong.player.y = 80;
+  dong.frostReady = true;
+  explode(dong, 480, 200, false);
+  if (dong.frostReady) throw new Error('冻廊 frost spends');
+  if (!(dong.enemies[0].frostT > 0) || !(dong.enemies[1].frostT > 0)) {
+    throw new Error('BLAST_R at plant hits both guards and sets frostT');
+  }
+  if (dong.enemies[0].hp <= 0 || dong.enemies[1].hp <= 0) throw new Error('冻廊 guards survive one hit');
+  dong.player.x = dong.enemies[0].x;
+  dong.player.y = dong.enemies[0].y;
+  dong.player.hearts = 3;
+  dong.player.inv = 0;
+  dong.player.dashT = 0;
+  update(dong, 0.016);
+  if (dong.player.hearts !== 3) throw new Error('walking into frosted guard does not hurt');
+  dong.player.x = 80;
+  dong.player.y = 80;
+  dong.player.inv = 0;
+  for (let i = 0; i < 20; i++) update(dong, 0.1);
+  if (dong.enemies[0].frostT > 0 || dong.enemies[1].frostT > 0) throw new Error('冻廊 frost expires');
+  dong.player.x = dong.enemies[0].x;
+  dong.player.y = dong.enemies[0].y;
+  dong.player.hearts = 3;
+  dong.player.inv = 0;
+  dong.player.dashT = 0;
+  update(dong, 0.016);
+  if (dong.player.hearts >= 3) throw new Error('after frost expires bump hurts again');
+  explode(dong, dongBox.x + dongBox.w * 0.5, dongBox.y - 20, false);
+  if (!dongBox.open) throw new Error('冻廊 dry trail should open 心核');
+  takeCore(dong, { x: 100, y: 100 });
+  if (!dong.won || dong.toast !== TOAST.all) throw new Error('冻廊 should 通关');
+  const hudDong = makeState();
+  resetRoom(hudDong, 24, false);
+  if (roomHudText(hudDong) !== '冻廊 · 25/25') throw new Error('HUD 冻廊 25/25');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
