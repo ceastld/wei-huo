@@ -1813,7 +1813,7 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
     let y = 0;
     if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
     if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
-    if (keys.has('ArrowLeft')) x -= 1;
+    if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
     if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
     if (!stick.active) {
       s.input.x = x;
@@ -1828,7 +1828,7 @@ function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
       e.preventDefault();
       s.input.dash = true;
     }
-    if (e.code === 'KeyA') {
+    if (e.code === 'KeyG') {
       e.preventDefault();
       if (!e.repeat) toggleWatch(s);
     }
@@ -2115,9 +2115,14 @@ function selfCheck() {
   if (NAMES.scorch !== '焦痕') throw new Error('焦痕 exists');
   if (NAMES.watch !== '观摩') throw new Error('观摩 name');
   if (TOAST.watch !== '观摩中') throw new Error('观摩中');
+
   if (typeof setWatch !== 'function' || typeof watchSteer !== 'function') {
     throw new Error('观摩 helpers');
   }
+  const inputSrc = Function.prototype.toString.call(bindInput);
+  if (inputSrc.indexOf("keys.has('KeyA')") < 0) throw new Error('A moves left');
+  if (inputSrc.indexOf("e.code === 'KeyG'") < 0) throw new Error('G toggles 观摩');
+  if (inputSrc.indexOf("e.code === 'KeyA'") >= 0) throw new Error('A must not toggle 观摩');
   let houndN = 0;
   let mothN = 0;
   for (let r = 0; r < ROOMS.length; r++) {
