@@ -27,6 +27,7 @@ const BOUNCE_N = 2;
 const ROLL_N = 3;
 const ROLL_GAP = 90;
 const ROLL_DT = 0.16;
+const MIRROR_DT = 0.14;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -107,6 +108,7 @@ const NAMES = {
   delay: '迟爆',
   bounce: '跳爆',
   roll: '卷爆',
+  mirror: '镜爆',
   eater: '拾烬',
   shell: '壳卫',
 };
@@ -201,6 +203,9 @@ const TOAST = {
   rollGet: '捡到卷爆',
   rollUse: '卷出去了',
   rollRoom: '卷过去清场',
+  mirrorGet: '捡到镜爆',
+  mirrorUse: '对岸也炸了',
+  mirrorRoom: '对岸清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -228,6 +233,7 @@ const COL = {
   delay: '#ff9a4a',
   bounce: '#ff4ad2',
   roll: '#c86aff',
+  mirror: '#6affc2',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -243,6 +249,7 @@ let ROOMS = [];
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 function dist(ax, ay, bx, by) { return Math.hypot(bx - ax, by - ay); }
 function lerp(a, b, t) { return a + (b - a) * t; }
+function mirrorX(s, x) { return (s.roomW || VIEW_W) - x; }
 
 function adoptRooms(pack) {
   if (pack && pack.rooms && pack.rooms.length) {
@@ -460,6 +467,7 @@ function lootKind(drop) {
   if (drop === '迟爆' || drop === 'delay') return 'delay';
   if (drop === '跳爆' || drop === 'bounce') return 'bounce';
   if (drop === '卷爆' || drop === 'roll') return 'roll';
+  if (drop === '镜爆' || drop === 'mirror') return 'mirror';
   return null;
 }
 
@@ -526,12 +534,14 @@ function makeState() {
     delayReady: false,
     bounceReady: false,
     rollReady: false,
+    mirrorReady: false,
     baits: [],
     bolts: [],
     trips: [],
     delays: [],
     bounceArcs: [],
     rolls: [],
+    mirrors: [],
     echoes: [],
     echoing: false,
     splits: [],
@@ -596,6 +606,7 @@ function resetRoom(s, index, keepHearts) {
   s.delayReady = false;
   s.bounceReady = false;
   s.rollReady = false;
+  s.mirrorReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -618,6 +629,8 @@ function resetRoom(s, index, keepHearts) {
   s.bounceArcs.length = 0;
   if (!s.rolls) s.rolls = [];
   s.rolls.length = 0;
+  if (!s.mirrors) s.mirrors = [];
+  s.mirrors.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -726,6 +739,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '迟廊') toast(s, TOAST.delayRoom, 1.4, COL.delay);
   else if (room.name === '跳廊') toast(s, TOAST.bounceRoom, 1.4, COL.bounce);
   else if (room.name === '卷廊') toast(s, TOAST.rollRoom, 1.4, COL.roll);
+  else if (room.name === '镜廊') toast(s, TOAST.mirrorRoom, 1.4, COL.mirror);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1239,6 +1253,30 @@ function updateRolls(s, dt) {
   }
 }
 
+function updateMirrors(s, dt) {
+  if (!s.mirrors || !s.mirrors.length) return;
+  const fires = [];
+  for (let i = s.mirrors.length - 1; i >= 0; i--) {
+    const m = s.mirrors[i];
+    m.t -= dt;
+    if (m.t <= 0) {
+      fires.push(m);
+      s.mirrors.splice(i, 1);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const m = fires[i];
+    const hx = clamp(m.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(m.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 6);
+      burst(s, hx, hy, 5, COL.mirror, 160);
+    }
+  }
+}
+
 function updateDelays(s, dt) {
   if (!s.delays || !s.delays.length) return;
   const pops = [];
@@ -1331,6 +1369,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.rollReady) {
     s.rollReady = false;
     rolled = true;
+  }
+  let mirrored = false;
+  if (!forked && s.mirrorReady) {
+    s.mirrorReady = false;
+    mirrored = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -1777,6 +1820,18 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x + face.x * ROLL_GAP, y + face.y * ROLL_GAP, 5, COL.roll, 170);
     }
   }
+  if (mirrored) {
+    const mx = clamp(mirrorX(s, x), 0, s.roomW || VIEW_W);
+    const my = clamp(y, 0, s.roomH || VIEW_H);
+    if (!s.mirrors) s.mirrors = [];
+    s.mirrors.push({ x: mx, y: my, t: MIRROR_DT, ox: x, oy: y });
+    toast(s, TOAST.mirrorUse, 1.1, COL.mirror);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, mx, my, 5, COL.mirror, 170);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2032,6 +2087,7 @@ function watchSteer(s, dt) {
   let delayIt = null;
   let bounceIt = null;
   let rollIt = null;
+  let mirrorIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2052,8 +2108,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'delay') delayIt = it;
     if (it.kind === 'bounce') bounceIt = it;
     if (it.kind === 'roll') rollIt = it;
+    if (it.kind === 'mirror') mirrorIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt);
 
   let guard = null;
   let gd = 1e9;
@@ -2155,6 +2212,10 @@ function watchSteer(s, dt) {
   } else if (!s.rollReady && rollIt) {
     tx = rollIt.x - p.x;
     ty = rollIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.mirrorReady && mirrorIt) {
+    tx = mirrorIt.x - p.x;
+    ty = mirrorIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -2329,6 +2390,7 @@ function update(s, dt) {
     updateTrips(s, dt);
     updateDelays(s, dt);
     updateRolls(s, dt);
+    updateMirrors(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
   }
@@ -2344,6 +2406,7 @@ function update(s, dt) {
     updateTrips(s, dt);
     updateDelays(s, dt);
     updateRolls(s, dt);
+    updateMirrors(s, dt);
     return;
   }
 
@@ -2451,6 +2514,7 @@ function update(s, dt) {
   updateTrips(s, dt);
   updateDelays(s, dt);
   updateRolls(s, dt);
+  updateMirrors(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
@@ -2601,6 +2665,13 @@ function update(s, dt) {
       toast(s, TOAST.rollGet, 1.1, COL.roll);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.roll, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'mirror') {
+      s.mirrorReady = true;
+      toast(s, TOAST.mirrorGet, 1.1, COL.mirror);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.mirror, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -3174,6 +3245,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.roll, it.x, it.y - 16);
+    } else if (it.kind === 'mirror') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.mirror, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.mirror;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.mirror;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.mirror, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -3412,6 +3498,40 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('卷', r.x, r.y - 12);
+    }
+  }
+
+  if (!reducedMotion() && s.mirrors && s.mirrors.length) {
+    for (let i = 0; i < s.mirrors.length; i++) {
+      const m = s.mirrors[i];
+      const ox = m.ox == null ? m.x : m.ox;
+      const oy = m.oy == null ? m.y : m.oy;
+      ctx.strokeStyle = COL.mirror;
+      ctx.globalAlpha = 0.28;
+      ctx.lineCap = 'round';
+      ctx.lineWidth = 1.6 / fit.scale;
+      ctx.setLineDash([6 / fit.scale, 5 / fit.scale]);
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(m.x, m.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      const pulse = 0.88 + 0.16 * (0.5 + 0.5 * Math.sin((s.time || 0) * 8 + i));
+      const rad = 9 * pulse;
+      glow(ctx, m.x, m.y, rad + 6, COL.mirror, 0.35);
+      ctx.fillStyle = COL.mirror;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, rad * 0.72, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.mirror;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('镜', m.x, m.y - 12);
     }
   }
 
@@ -3963,6 +4083,27 @@ function draw(s, ctx) {
     ctx.arc(rx, ry, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.mirrorReady) {
+    let mx;
+    let my;
+    if (reducedMotion()) {
+      mx = p.x - 4;
+      my = p.y - 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4;
+      mx = p.x + Math.cos(a) * 16;
+      my = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, mx, my, 8, COL.mirror, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.mirror;
+    ctx.arc(mx, my, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(mx, my, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -4249,6 +4390,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (delayEl && s.rollReady && !s.delayReady) {
     delayEl.textContent = NAMES.roll;
   }
+  const mirrorEl = (typeof document !== 'undefined') ? document.getElementById('mirror') : null;
+  if (mirrorEl) {
+    mirrorEl.textContent = s.mirrorReady ? NAMES.mirror : '';
+  } else if (rollEl && s.mirrorReady && !s.rollReady) {
+    rollEl.textContent = NAMES.mirror;
+  } else if (bounceEl && s.mirrorReady && !s.bounceReady) {
+    bounceEl.textContent = NAMES.mirror;
+  } else if (delayEl && s.mirrorReady && !s.delayReady) {
+    delayEl.textContent = NAMES.mirror;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -4355,10 +4506,11 @@ function selfCheck() {
   if (ROLL_N !== 3) throw new Error('ROLL_N 3');
   if (ROLL_GAP !== 90) throw new Error('ROLL_GAP 90');
   if (ROLL_DT !== 0.16) throw new Error('ROLL_DT 0.16');
+  if (MIRROR_DT !== 0.14) throw new Error('MIRROR_DT 0.14');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 33) throw new Error('need 33 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊'];
+  if (!ROOMS || ROOMS.length !== 34) throw new Error('need 34 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -4414,12 +4566,17 @@ function selfCheck() {
   if (ROOMS[31].name !== '跳廊') throw new Error('room 32 跳廊');
   if (ROOMS[32].id !== 'juanlang') throw new Error('卷廊 id');
   if (ROOMS[32].name !== '卷廊') throw new Error('room 33 卷廊');
+  if (ROOMS[33].id !== 'jinglang') throw new Error('镜廊 id');
+  if (ROOMS[33].name !== '镜廊') throw new Error('room 34 镜廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
   if (COL.bounce !== '#ff4ad2') throw new Error('COL.bounce');
   if (NAMES.roll !== '卷爆') throw new Error('NAMES.roll');
   if (COL.roll !== '#c86aff') throw new Error('COL.roll');
+  if (NAMES.mirror !== '镜爆') throw new Error('NAMES.mirror');
+  if (COL.mirror !== '#6affc2') throw new Error('COL.mirror');
+  if (lootKind('镜爆') !== 'mirror' || lootKind('mirror') !== 'mirror') throw new Error('lootKind 镜爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -4437,7 +4594,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '壳卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '壳卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -4594,10 +4751,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/33') throw new Error('HUD 空场 1/33');
+  if (roomHudText(hud0) !== '空场 · 1/34') throw new Error('HUD 空场 1/34');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/33') throw new Error('HUD 3/33');
+  if (roomHudText(hud2) !== '水巷 · 3/34') throw new Error('HUD 3/34');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -4809,7 +4966,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/33') throw new Error('HUD 灰径 11/33');
+  if (roomHudText(hudAsh) !== '灰径 · 11/34') throw new Error('HUD 灰径 11/34');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -4836,7 +4993,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/33') throw new Error('HUD 环行 12/33');
+  if (roomHudText(hudRing) !== '环行 · 12/34') throw new Error('HUD 环行 12/34');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -4865,7 +5022,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/33') throw new Error('HUD 密线 13/33');
+  if (roomHudText(hudWire) !== '密线 · 13/34') throw new Error('HUD 密线 13/34');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -5181,7 +5338,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/33') throw new Error('HUD 潮廊 14/33');
+  if (roomHudText(hudChao) !== '潮廊 · 14/34') throw new Error('HUD 潮廊 14/34');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -5251,7 +5408,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/33') throw new Error('HUD 种廊 15/33');
+  if (roomHudText(hudZhong) !== '种廊 · 15/34') throw new Error('HUD 种廊 15/34');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -5378,7 +5535,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/33') throw new Error('HUD 油廊 16/33');
+  if (roomHudText(hudYou) !== '油廊 · 16/34') throw new Error('HUD 油廊 16/34');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -5456,7 +5613,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/33') throw new Error('HUD 急廊 17/33');
+  if (roomHudText(hudJi) !== '急廊 · 17/34') throw new Error('HUD 急廊 17/34');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -5799,7 +5956,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/33') throw new Error('HUD 拾廊 18/33');
+  if (roomHudText(hudShi) !== '拾廊 · 18/34') throw new Error('HUD 拾廊 18/34');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -5891,6 +6048,7 @@ function selfCheck() {
   if (lootKind('绊爆') !== 'trip' || lootKind('trip') !== 'trip') throw new Error('lootKind 绊爆');
   if (lootKind('跳爆') !== 'bounce' || lootKind('bounce') !== 'bounce') throw new Error('lootKind 跳爆');
   if (lootKind('卷爆') !== 'roll' || lootKind('roll') !== 'roll') throw new Error('lootKind 卷爆');
+  if (lootKind('镜爆') !== 'mirror' || lootKind('mirror') !== 'mirror') throw new Error('lootKind 镜爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -6069,7 +6227,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/33') throw new Error('HUD 响廊 19/33');
+  if (roomHudText(hudXiang) !== '响廊 · 19/34') throw new Error('HUD 响廊 19/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -6261,7 +6419,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/33') throw new Error('HUD 吸廊 20/33');
+  if (roomHudText(hudXi) !== '吸廊 · 20/34') throw new Error('HUD 吸廊 20/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -6482,7 +6640,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/33') throw new Error('HUD 冲廊 21/33');
+  if (roomHudText(hudChong) !== '冲廊 · 21/34') throw new Error('HUD 冲廊 21/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -6724,7 +6882,7 @@ function selfCheck() {
   if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/33') throw new Error('HUD 裂廊 22/33');
+  if (roomHudText(hudLie) !== '裂廊 · 22/34') throw new Error('HUD 裂廊 22/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -7004,10 +7162,10 @@ function selfCheck() {
   if (guan.roomName !== '晕廊') throw new Error('core advances to 晕廊');
   const hudGuan = makeState();
   resetRoom(hudGuan, 22, false);
-  if (roomHudText(hudGuan) !== '贯廊 · 23/33') throw new Error('HUD 贯廊 23/33');
+  if (roomHudText(hudGuan) !== '贯廊 · 23/34') throw new Error('HUD 贯廊 23/34');
   const hudChong23 = makeState();
   resetRoom(hudChong23, 20, false);
-  if (roomHudText(hudChong23) !== '冲廊 · 21/33') throw new Error('HUD 冲廊 21/33');
+  if (roomHudText(hudChong23) !== '冲廊 · 21/34') throw new Error('HUD 冲廊 21/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
@@ -8185,31 +8343,40 @@ function selfCheck() {
   rollSatKeep.rollReady = true;
   rollSatKeep.bounceReady = true;
   rollSatKeep.delayReady = true;
+  rollSatKeep.mirrorReady = true;
   for (let i = 0; i < 10; i++) update(rollSatKeep, 0.05);
   if (rollSatKeep.rollReady !== true) throw new Error('satellite keeps roll');
   if (rollSatKeep.rolls && rollSatKeep.rolls.length) throw new Error('satellite does not queue roll');
   if (rollSatKeep.bounceReady !== true) throw new Error('satellite keeps bounce with roll');
   if (rollSatKeep.delayReady !== true) throw new Error('satellite keeps delay with roll');
+  if (rollSatKeep.mirrorReady !== true) throw new Error('satellite keeps mirror');
+  if (rollSatKeep.mirrors && rollSatKeep.mirrors.length) throw new Error('satellite does not queue mirror');
 
   const rollEchoKeep = makeState();
   resetRoom(rollEchoKeep, 0, false);
   rollEchoKeep.echoReady = true;
   explode(rollEchoKeep, 400, 200, false);
   rollEchoKeep.rollReady = true;
+  rollEchoKeep.mirrorReady = true;
   for (let i = 0; i < 12; i++) update(rollEchoKeep, 0.05);
   if (rollEchoKeep.rollReady !== true) throw new Error('echo boom keeps roll');
   if (rollEchoKeep.rolls && rollEchoKeep.rolls.length) throw new Error('echo boom does not queue roll');
+  if (rollEchoKeep.mirrorReady !== true) throw new Error('echo boom keeps mirror');
+  if (rollEchoKeep.mirrors && rollEchoKeep.mirrors.length) throw new Error('echo boom does not queue mirror');
 
   const rollForkKeep = makeState();
   resetRoom(rollForkKeep, 0, false);
   rollForkKeep.rollReady = true;
   rollForkKeep.bounceReady = true;
   rollForkKeep.delayReady = true;
+  rollForkKeep.mirrorReady = true;
   explode(rollForkKeep, 200, 200, false, false, false, { fork: true });
   if (rollForkKeep.rollReady !== true) throw new Error('forked boom keeps roll');
   if (rollForkKeep.rolls && rollForkKeep.rolls.length) throw new Error('forked boom does not queue roll');
   if (rollForkKeep.bounceReady !== true) throw new Error('forked boom keeps bounce with roll');
   if (rollForkKeep.delayReady !== true) throw new Error('forked boom keeps delay with roll');
+  if (rollForkKeep.mirrorReady !== true) throw new Error('forked boom keeps mirror');
+  if (rollForkKeep.mirrors && rollForkKeep.mirrors.length) throw new Error('forked boom does not queue mirror');
 
   const rollPick = makeState();
   resetRoom(rollPick, 0, false);
@@ -8218,6 +8385,123 @@ function selfCheck() {
   update(rollPick, 0.016);
   if (rollPick.rollReady !== true) throw new Error('pick 卷爆');
   if (rollPick.toast !== TOAST.rollGet) throw new Error('捡到卷爆 pick');
+
+  const mirrorOn = makeState();
+  resetRoom(mirrorOn, 0, false);
+  mirrorOn.roomW = 960;
+  mirrorOn.roomH = 400;
+  mirrorOn.mirrorReady = true;
+  mirrorOn.dashBoomReady = true;
+  mirrorOn.hasteReady = true;
+  mirrorOn.rollReady = true;
+  mirrorOn.bounceReady = true;
+  mirrorOn.player.x = 80;
+  mirrorOn.player.y = 80;
+  mirrorOn.player.inv = 1;
+  mirrorOn.enemies = [testFoe(680, 200), testFoe(680, 160), testFoe(680, 240)];
+  const mHp0 = mirrorOn.enemies[0].hp;
+  const mHp1 = mirrorOn.enemies[1].hp;
+  const mHp2 = mirrorOn.enemies[2].hp;
+  explode(mirrorOn, 280, 200, false);
+  if (mirrorOn.mirrorReady !== false) throw new Error('mirrorReady consumed on boom');
+  if (mirrorOn.rollReady !== false) throw new Error('roll still spends with mirror');
+  if (mirrorOn.bounceReady !== false) throw new Error('bounce still spends with mirror');
+  if (mirrorOn.dashBoomReady !== true) throw new Error('mirror boom keeps 冲爆');
+  if (mirrorOn.hasteReady !== true) throw new Error('mirror boom keeps 急燃');
+  if (mirrorOn.toast !== TOAST.mirrorUse) throw new Error('对岸也炸了');
+  if (!mirrorOn.mirrors || mirrorOn.mirrors.length !== 1) throw new Error('queues 1 mirror');
+  if (Math.abs(mirrorOn.mirrors[0].x - 680) > 1) throw new Error('mirror pending x');
+  if (Math.abs(mirrorOn.mirrors[0].y - 200) > 1) throw new Error('mirror pending y');
+  if (Math.abs(mirrorOn.mirrors[0].t - MIRROR_DT) > 1e-9) throw new Error('mirror dt');
+  if (mirrorOn.enemies[0].hp !== mHp0 || mirrorOn.enemies[1].hp !== mHp1 || mirrorOn.enemies[2].hp !== mHp2) {
+    throw new Error('mirror not instant');
+  }
+  mirrorOn.hitstop = 0;
+  update(mirrorOn, MIRROR_DT + 0.01);
+  if (mirrorOn.mirrors.length !== 0) throw new Error('mirror fires');
+  if (!(mirrorOn.enemies[0].hp < mHp0 || mirrorOn.enemies[0].hp <= 0)) throw new Error('mirror hot dmg 0');
+  if (!(mirrorOn.enemies[1].hp < mHp1 || mirrorOn.enemies[1].hp <= 0)) throw new Error('mirror hot dmg 1');
+  if (!(mirrorOn.enemies[2].hp < mHp2 || mirrorOn.enemies[2].hp <= 0)) throw new Error('mirror hot dmg 2');
+
+  const mirrorTick = makeState();
+  resetRoom(mirrorTick, 0, false);
+  mirrorTick.roomW = 960;
+  mirrorTick.roomH = 400;
+  mirrorTick.mirrorReady = true;
+  mirrorTick.player.x = 80;
+  mirrorTick.player.y = 80;
+  mirrorTick.player.inv = 1;
+  mirrorTick.enemies = [testFoe(680, 200), testFoe(680, 160), testFoe(680, 240)];
+  const tickM0 = mirrorTick.enemies[0].hp;
+  const tickM1 = mirrorTick.enemies[1].hp;
+  const tickM2 = mirrorTick.enemies[2].hp;
+  explode(mirrorTick, 280, 200, false);
+  if (mirrorTick.mirrorReady !== false) throw new Error('mirrorTick consumed');
+  if (!mirrorTick.mirrors || mirrorTick.mirrors.length !== 1) throw new Error('mirrorTick queues 1');
+  if (mirrorTick.toast !== TOAST.mirrorUse) throw new Error('对岸也炸了 tick');
+  for (let i = 0; i < 20; i++) {
+    mirrorTick.hitstop = 0;
+    update(mirrorTick, 0.016);
+  }
+  if (!(mirrorTick.enemies[0].hp < tickM0 || mirrorTick.enemies[0].hp <= 0)) throw new Error('mirror update dmg 0');
+  if (!(mirrorTick.enemies[1].hp < tickM1 || mirrorTick.enemies[1].hp <= 0)) throw new Error('mirror update dmg 1');
+  if (!(mirrorTick.enemies[2].hp < tickM2 || mirrorTick.enemies[2].hp <= 0)) throw new Error('mirror update dmg 2');
+
+  const mirrorWet = makeState();
+  resetRoom(mirrorWet, 0, false);
+  mirrorWet.mirrorReady = true;
+  mirrorWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(mirrorWet, 120, 120, false);
+  if (!mirrorWet.sparks[0].wet) throw new Error('mirror wet spark');
+  for (let i = 0; i < 24; i++) update(mirrorWet, 0.1);
+  if (mirrorWet.mirrorReady !== true) throw new Error('wet keeps 镜爆');
+  if (mirrorWet.stats.booms !== 0) throw new Error('wet mirror no boom');
+  if (mirrorWet.mirrors && mirrorWet.mirrors.length) throw new Error('wet does not queue mirror');
+
+  const mirrorKeepDrop = makeState();
+  resetRoom(mirrorKeepDrop, 0, false);
+  mirrorKeepDrop.mirrorReady = true;
+  dropSpark(mirrorKeepDrop, 200, 200, false);
+  if (mirrorKeepDrop.mirrorReady !== true) throw new Error('dropSpark keeps 镜爆');
+  mirrorKeepDrop.player.x = 80;
+  mirrorKeepDrop.player.y = 80;
+  mirrorKeepDrop.input.dash = true;
+  update(mirrorKeepDrop, 0.016);
+  if (mirrorKeepDrop.mirrorReady !== true) throw new Error('dash keeps 镜爆');
+  mirrorKeepDrop.player.dashT = 0;
+  mirrorKeepDrop.player.dashCd = 0;
+  mirrorKeepDrop.hitstop = 0;
+  mirrorKeepDrop.dashBoomReady = true;
+  mirrorKeepDrop.input.dash = true;
+  update(mirrorKeepDrop, 0.016);
+  if (mirrorKeepDrop.mirrorReady !== true) throw new Error('冲爆 keeps 镜爆');
+  if (mirrorKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends with mirror');
+
+  const mirrorHopKeep = makeState();
+  resetRoom(mirrorHopKeep, 0, false);
+  mirrorHopKeep.player.faceX = 1;
+  mirrorHopKeep.player.faceY = 0;
+  mirrorHopKeep.player.x = 80;
+  mirrorHopKeep.player.y = 80;
+  mirrorHopKeep.player.inv = 1;
+  mirrorHopKeep.rollReady = true;
+  explode(mirrorHopKeep, 340, 200, false);
+  mirrorHopKeep.mirrorReady = true;
+  for (let i = 0; i < 3; i++) {
+    mirrorHopKeep.hitstop = 0;
+    updateRolls(mirrorHopKeep, ROLL_DT + 0.01);
+  }
+  if (mirrorHopKeep.mirrorReady !== true) throw new Error('roll-hop keeps mirror');
+  if (mirrorHopKeep.mirrors && mirrorHopKeep.mirrors.length) throw new Error('roll-hop does not queue mirror');
+
+  const mirrorPick = makeState();
+  resetRoom(mirrorPick, 0, false);
+  if (mirrorPick.mirrorReady) throw new Error('mirror starts false');
+  mirrorPick.items.push({ kind: 'mirror', x: mirrorPick.player.x, y: mirrorPick.player.y, r: 10, taken: false });
+  update(mirrorPick, 0.016);
+  if (mirrorPick.mirrorReady !== true) throw new Error('pick 镜爆');
+  if (mirrorPick.toast !== TOAST.mirrorGet) throw new Error('捡到镜爆 pick');
+  if (Math.abs(mirrorX({ roomW: 960 }, 280) - 680) > 1e-9) throw new Error('mirrorX 960');
 
   const yun = makeState();
   resetRoom(yun, 23, false);
@@ -8338,10 +8622,10 @@ function selfCheck() {
   if (yun.roomName !== '冻廊') throw new Error('core advances to 冻廊');
   const hudYun = makeState();
   resetRoom(hudYun, 23, false);
-  if (roomHudText(hudYun) !== '晕廊 · 24/33') throw new Error('HUD 晕廊 24/33');
+  if (roomHudText(hudYun) !== '晕廊 · 24/34') throw new Error('HUD 晕廊 24/34');
   const hudLie24 = makeState();
   resetRoom(hudLie24, 21, false);
-  if (roomHudText(hudLie24) !== '裂廊 · 22/33') throw new Error('HUD 裂廊 22/33');
+  if (roomHudText(hudLie24) !== '裂廊 · 22/34') throw new Error('HUD 裂廊 22/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
@@ -8481,7 +8765,7 @@ function selfCheck() {
   if (dong.roomName !== '推廊') throw new Error('core advances to 推廊');
   const hudDong = makeState();
   resetRoom(hudDong, 24, false);
-  if (roomHudText(hudDong) !== '冻廊 · 25/33') throw new Error('HUD 冻廊 25/33');
+  if (roomHudText(hudDong) !== '冻廊 · 25/34') throw new Error('HUD 冻廊 25/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
@@ -8636,7 +8920,7 @@ function selfCheck() {
   if (tui.roomName !== '诱廊') throw new Error('core advances to 诱廊');
   const hudTui = makeState();
   resetRoom(hudTui, 25, false);
-  if (roomHudText(hudTui) !== '推廊 · 26/33') throw new Error('HUD 推廊 26/33');
+  if (roomHudText(hudTui) !== '推廊 · 26/34') throw new Error('HUD 推廊 26/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHOVE_V !== 280) throw new Error('SHOVE_V 280');
@@ -8786,7 +9070,7 @@ function selfCheck() {
   if (yin.roomName !== '壳廊') throw new Error('core advances to 壳廊');
   const hudYin = makeState();
   resetRoom(hudYin, 26, false);
-  if (roomHudText(hudYin) !== '诱廊 · 27/33') throw new Error('HUD 诱廊 27/33');
+  if (roomHudText(hudYin) !== '诱廊 · 27/34') throw new Error('HUD 诱廊 27/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
@@ -8905,7 +9189,7 @@ function selfCheck() {
   if (qiao.roomName !== '雷廊') throw new Error('core advances to 雷廊');
   const hudQiao = makeState();
   resetRoom(hudQiao, 27, false);
-  if (roomHudText(hudQiao) !== '壳廊 · 28/33') throw new Error('HUD 壳廊 28/33');
+  if (roomHudText(hudQiao) !== '壳廊 · 28/34') throw new Error('HUD 壳廊 28/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
@@ -9080,7 +9364,7 @@ function selfCheck() {
   if (lei.roomName !== '绊廊') throw new Error('core advances to 绊廊');
   const hudLei = makeState();
   resetRoom(hudLei, 28, false);
-  if (roomHudText(hudLei) !== '雷廊 · 29/33') throw new Error('HUD 雷廊 29/33');
+  if (roomHudText(hudLei) !== '雷廊 · 29/34') throw new Error('HUD 雷廊 29/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BOLT_R !== 170) throw new Error('BOLT_R 170');
@@ -9268,7 +9552,7 @@ function selfCheck() {
   if (ban.roomName !== '迟廊') throw new Error('core advances to 迟廊');
   const hudBan = makeState();
   resetRoom(hudBan, 29, false);
-  if (roomHudText(hudBan) !== '绊廊 · 30/33') throw new Error('HUD 绊廊 30/33');
+  if (roomHudText(hudBan) !== '绊廊 · 30/34') throw new Error('HUD 绊廊 30/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (TRIP_R !== 16) throw new Error('TRIP_R 16');
@@ -9475,7 +9759,7 @@ function selfCheck() {
   if (chi.roomName !== '跳廊') throw new Error('core advances to 跳廊');
   const hudChi = makeState();
   resetRoom(hudChi, 30, false);
-  if (roomHudText(hudChi) !== '迟廊 · 31/33') throw new Error('HUD 迟廊 31/33');
+  if (roomHudText(hudChi) !== '迟廊 · 31/34') throw new Error('HUD 迟廊 31/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (DELAY_T !== 1.2) throw new Error('DELAY_T 1.2');
@@ -9641,7 +9925,7 @@ function selfCheck() {
   if (tiao.roomName !== '卷廊') throw new Error('core advances to 卷廊');
   const hudTiao = makeState();
   resetRoom(hudTiao, 31, false);
-  if (roomHudText(hudTiao) !== '跳廊 · 32/33') throw new Error('HUD 跳廊 32/33');
+  if (roomHudText(hudTiao) !== '跳廊 · 32/34') throw new Error('HUD 跳廊 32/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BOUNCE_R !== 150) throw new Error('BOUNCE_R 150');
@@ -9668,6 +9952,7 @@ function selfCheck() {
   let juanHeal = 0;
   let juanThick = 0;
   let juanRollItem = 0;
+  let juanMirrorItem = 0;
   let juanBounceItem = 0;
   let juanDelayItem = 0;
   let juanTripItem = 0;
@@ -9690,6 +9975,7 @@ function selfCheck() {
   }
   for (let i = 0; i < juan.items.length; i++) {
     if (juan.items[i].kind === 'roll') juanRollItem += 1;
+    if (juan.items[i].kind === 'mirror') juanMirrorItem += 1;
     if (juan.items[i].kind === 'bounce') juanBounceItem += 1;
     if (juan.items[i].kind === 'delay') juanDelayItem += 1;
     if (juan.items[i].kind === 'trip') juanTripItem += 1;
@@ -9707,8 +9993,8 @@ function selfCheck() {
     if (juan.items[i].kind === 'seed') juanSeedItem += 1;
   }
   if (juanRollItem < 1) throw new Error('卷廊 needs 卷爆');
-  if (juanBounceItem || juanDelayItem || juanTripItem || juanBoltItem || juanBaitItem || juanShoveItem || juanFrostItem || juanHaloItem || juanPierceItem || juanSplitItem || juanDashItem || juanSuckItem || juanEchoItem || juanHasteItem || juanSeedItem) {
-    throw new Error('卷廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆/霜爆/推爆/诱爆/雷爆/绊爆/迟爆/跳爆');
+  if (juanBounceItem || juanMirrorItem || juanDelayItem || juanTripItem || juanBoltItem || juanBaitItem || juanShoveItem || juanFrostItem || juanHaloItem || juanPierceItem || juanSplitItem || juanDashItem || juanSuckItem || juanEchoItem || juanHasteItem || juanSeedItem) {
+    throw new Error('卷廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆/霜爆/推爆/诱爆/雷爆/绊爆/迟爆/跳爆/镜爆');
   }
   if (juanCore !== 1) throw new Error('卷廊 心核');
   if (juanHeal < 1) throw new Error('卷廊 回星');
@@ -9816,10 +10102,12 @@ function selfCheck() {
   explode(juan, juanBox.x + juanBox.w * 0.5, juanBox.y - 20, false);
   if (!juanBox.open) throw new Error('卷廊 dry trail should open 心核');
   takeCore(juan, { x: 100, y: 100 });
-  if (!juan.won || juan.toast !== TOAST.all) throw new Error('卷廊 should 通关');
+  if (juan.won) throw new Error('卷廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(juan, 0.1);
+  if (juan.roomName !== '镜廊') throw new Error('core advances to 镜廊');
   const hudJuan = makeState();
   resetRoom(hudJuan, 32, false);
-  if (roomHudText(hudJuan) !== '卷廊 · 33/33') throw new Error('HUD 卷廊 33/33');
+  if (roomHudText(hudJuan) !== '卷廊 · 33/34') throw new Error('HUD 卷廊 33/34');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (ROLL_N !== 3) throw new Error('ROLL_N 3');
@@ -9829,6 +10117,202 @@ function selfCheck() {
   if (TOAST.rollGet !== '捡到卷爆') throw new Error('捡到卷爆');
   if (TOAST.rollUse !== '卷出去了') throw new Error('卷出去了 toast');
   if (TOAST.rollRoom !== '卷过去清场') throw new Error('卷过去清场');
+
+  const jing = makeState();
+  resetRoom(jing, 33, false);
+  if (jing.roomName !== '镜廊' || jing.roomId !== 'jinglang') throw new Error('jinglang load');
+  if (jing.toast !== TOAST.mirrorRoom) throw new Error('镜廊 intro');
+  if (jing.roomW !== 960 || jing.roomH !== 400) throw new Error('镜廊 size');
+  if (jing.player.x !== 80 || jing.player.y !== 200) throw new Error('镜廊 spawn');
+  if (jing.mirrorReady) throw new Error('镜廊 mirror starts false');
+  if (jing.mirrors && jing.mirrors.length) throw new Error('镜廊 mirrors start empty');
+  let jingStill = 0;
+  let jingTide = 0;
+  for (let i = 0; i < jing.waters.length; i++) {
+    if (jing.waters[i].tide) jingTide += 1;
+    else jingStill += 1;
+  }
+  if (jingStill < 1) throw new Error('镜廊 needs static 水洼');
+  if (jingTide) throw new Error('镜廊 no tide');
+  let jingCore = 0;
+  let jingHeal = 0;
+  let jingThick = 0;
+  let jingMirrorItem = 0;
+  let jingRollItem = 0;
+  let jingBounceItem = 0;
+  let jingDelayItem = 0;
+  let jingTripItem = 0;
+  let jingBoltItem = 0;
+  let jingBaitItem = 0;
+  let jingShoveItem = 0;
+  let jingFrostItem = 0;
+  let jingHaloItem = 0;
+  let jingPierceItem = 0;
+  let jingSplitItem = 0;
+  let jingDashItem = 0;
+  let jingSuckItem = 0;
+  let jingEchoItem = 0;
+  let jingHasteItem = 0;
+  let jingSeedItem = 0;
+  for (let i = 0; i < jing.crates.length; i++) {
+    if (jing.crates[i].loot === 'core') jingCore += 1;
+    if (jing.crates[i].loot === 'heal') jingHeal += 1;
+    if (jing.crates[i].thick) jingThick += 1;
+  }
+  for (let i = 0; i < jing.items.length; i++) {
+    if (jing.items[i].kind === 'mirror') jingMirrorItem += 1;
+    if (jing.items[i].kind === 'roll') jingRollItem += 1;
+    if (jing.items[i].kind === 'bounce') jingBounceItem += 1;
+    if (jing.items[i].kind === 'delay') jingDelayItem += 1;
+    if (jing.items[i].kind === 'trip') jingTripItem += 1;
+    if (jing.items[i].kind === 'bolt') jingBoltItem += 1;
+    if (jing.items[i].kind === 'bait') jingBaitItem += 1;
+    if (jing.items[i].kind === 'shove') jingShoveItem += 1;
+    if (jing.items[i].kind === 'frost') jingFrostItem += 1;
+    if (jing.items[i].kind === 'halo') jingHaloItem += 1;
+    if (jing.items[i].kind === 'pierce') jingPierceItem += 1;
+    if (jing.items[i].kind === 'split') jingSplitItem += 1;
+    if (jing.items[i].kind === 'dashboom') jingDashItem += 1;
+    if (jing.items[i].kind === 'suck') jingSuckItem += 1;
+    if (jing.items[i].kind === 'echo') jingEchoItem += 1;
+    if (jing.items[i].kind === 'haste') jingHasteItem += 1;
+    if (jing.items[i].kind === 'seed') jingSeedItem += 1;
+  }
+  if (jingMirrorItem < 1) throw new Error('镜廊 needs 镜爆');
+  if (jingRollItem || jingBounceItem || jingDelayItem || jingTripItem || jingBoltItem || jingBaitItem || jingShoveItem || jingFrostItem || jingHaloItem || jingPierceItem || jingSplitItem || jingDashItem || jingSuckItem || jingEchoItem || jingHasteItem || jingSeedItem) {
+    throw new Error('镜廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆/霜爆/推爆/诱爆/雷爆/绊爆/迟爆/跳爆/卷爆');
+  }
+  if (jingCore !== 1) throw new Error('镜廊 心核');
+  if (jingHeal < 1) throw new Error('镜廊 回星');
+  const jingBox = jing.crates.find(function (c) { return c.loot === 'core'; });
+  if (!jingBox || jingBox.thick) throw new Error('镜廊 心核 crate is not thick');
+  if (jingThick) throw new Error('镜廊 no thick crate');
+  let jingHound = 0;
+  let jingGuard = 0;
+  let jingMoth = 0;
+  let jingEater = 0;
+  let jingShell = 0;
+  for (let i = 0; i < jing.enemies.length; i++) {
+    if (isHound(jing.enemies[i])) jingHound += 1;
+    else if (isMoth(jing.enemies[i])) jingMoth += 1;
+    else if (isEater(jing.enemies[i])) jingEater += 1;
+    else if (isShell(jing.enemies[i])) jingShell += 1;
+    else jingGuard += 1;
+  }
+  if (jingGuard !== 3 || jingHound !== 0 || jingMoth !== 0 || jingEater !== 0 || jingShell !== 0) {
+    throw new Error('镜廊 烬卫 only');
+  }
+  if (inWater(jing, 80, 200) || inOil(jing, 80, 200)) throw new Error('镜廊 spawn dry');
+  if (inWater(jing, 220, 200) || inOil(jing, 220, 200)) throw new Error('镜廊 镜爆 dry');
+  if (inOil(jing, 860, 188) || inWater(jing, 860, 188)) throw new Error('镜廊 core dry');
+  if (inWater(jing, 280, 200) || inOil(jing, 280, 200)) throw new Error('镜廊 plant dry');
+  if (inWater(jing, 680, 200) || inOil(jing, 680, 200)) throw new Error('镜廊 mirror-bank dry');
+  if (inWater(jing, 680, 160) || inOil(jing, 680, 160)) throw new Error('镜廊 guard N wet/oil');
+  if (inWater(jing, 680, 240) || inOil(jing, 680, 240)) throw new Error('镜廊 guard S wet/oil');
+  if (!inWater(jing, 350, 350)) throw new Error('镜廊 wet bag');
+  if (inWater(jing, 400, 100)) throw new Error('镜廊 north shelf wet');
+  for (let i = 0; i < jing.crates.length; i++) {
+    const c = jing.crates[i];
+    if (circleRect(jing.player.x, jing.player.y, jing.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('镜廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 300; x += 10) {
+    for (let i = 0; i < jing.crates.length; i++) {
+      const c = jing.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('镜廊 crate on dry walk');
+      }
+    }
+  }
+  for (let i = 0; i < jing.enemies.length; i++) {
+    const e = jing.enemies[i];
+    if (dist(e.x, e.y, 80, 200) < 80) throw new Error('镜廊 foe too close to spawn');
+    const dPlant = dist(e.x, e.y, 280, 200);
+    if (!(dPlant > HOT_BLAST_R)) throw new Error('镜廊 烬卫 outside plant blast');
+    const dMirror = dist(e.x, e.y, 680, 200);
+    if (!(dMirror <= HOT_BLAST_R + (e.r || 0))) throw new Error('镜廊 烬卫 inside mirror blast');
+  }
+  const jingH1 = jing.enemies.find(function (e) { return Math.abs(e.x - 680) < 1 && Math.abs(e.y - 200) < 1; });
+  const jingH2 = jing.enemies.find(function (e) { return Math.abs(e.x - 680) < 1 && Math.abs(e.y - 160) < 1; });
+  const jingH3 = jing.enemies.find(function (e) { return Math.abs(e.x - 680) < 1 && Math.abs(e.y - 240) < 1; });
+  if (!jingH1 || !jingH2 || !jingH3) throw new Error('镜廊 bank 烬卫');
+  const jingCoreCx = jingBox.x + jingBox.w * 0.5;
+  const jingCoreCy = jingBox.y + jingBox.h * 0.5;
+  if (!(dist(jingCoreCx, jingCoreCy, 680, 200) > HOT_BLAST_R)) throw new Error('镜廊 core outside mirror blast');
+  jing.player.x = 80;
+  jing.player.y = 80;
+  jing.player.hearts = 3;
+  jing.player.inv = 0;
+  jing.hitstop = 0;
+  jing.embers.length = 0;
+  const jingGround = jing.items.find(function (it) { return it.kind === 'mirror' && !it.taken; });
+  if (!jingGround) throw new Error('镜廊 ground 镜爆 present');
+  jing.player.x = jingGround.x;
+  jing.player.y = jingGround.y;
+  update(jing, 0.016);
+  if (jing.mirrorReady !== true) throw new Error('pick mirror → mirrorReady');
+  if (jing.toast !== TOAST.mirrorGet) throw new Error('捡到镜爆 room');
+  jing.player.x = 80;
+  jing.player.y = 80;
+  jing.player.inv = 1;
+  jing.hitstop = 0;
+  jing.embers.length = 0;
+  const jingHp1 = jingH1.hp;
+  const jingHp2 = jingH2.hp;
+  const jingHp3 = jingH3.hp;
+  explode(jing, 280, 200, false);
+  if (jing.mirrorReady) throw new Error('镜廊 mirror spends');
+  if (jing.toast !== TOAST.mirrorUse) throw new Error('对岸也炸了 room');
+  if (!jing.mirrors || jing.mirrors.length !== 1) throw new Error('镜廊 queues 1 mirror');
+  if (Math.abs(jing.mirrors[0].x - 680) > 1) throw new Error('镜廊 pending x');
+  if (jingH1.hp !== jingHp1 || jingH2.hp !== jingHp2 || jingH3.hp !== jingHp3) throw new Error('镜廊 mirror not instant');
+  jing.hitstop = 0;
+  updateMirrors(jing, MIRROR_DT + 0.01);
+  if (jing.mirrors.length !== 0) throw new Error('镜廊 reflection fires');
+  if (!(jingH1.hp < jingHp1 || jingH1.hp <= 0)) throw new Error('镜廊 mirror hot dmg 1');
+  if (!(jingH2.hp < jingHp2 || jingH2.hp <= 0)) throw new Error('镜廊 mirror hot dmg 2');
+  if (!(jingH3.hp < jingHp3 || jingH3.hp <= 0)) throw new Error('镜廊 mirror hot dmg 3');
+  jing.mirrorReady = true;
+  jing.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(jing, 120, 120, false);
+  if (!jing.sparks[jing.sparks.length - 1].wet) throw new Error('镜廊 wet spark');
+  const jingBooms = jing.stats.booms;
+  for (let i = 0; i < 24; i++) update(jing, 0.1);
+  if (jing.mirrorReady !== true) throw new Error('镜廊 wet fizzle does not consume');
+  if (jing.stats.booms !== jingBooms) throw new Error('镜廊 wet no extra boom');
+  jing.waters = [];
+  explode(jing, 200, 200, false, false, false, { fork: true });
+  if (jing.mirrorReady !== true) throw new Error('镜廊 fork does not consume');
+  jing.echoReady = true;
+  explode(jing, 200, 200, false);
+  jing.mirrorReady = true;
+  for (let i = 0; i < 12; i++) update(jing, 0.05);
+  if (jing.mirrorReady !== true) throw new Error('镜廊 echo does not consume');
+  jing.rollReady = true;
+  explode(jing, 200, 200, false);
+  jing.mirrorReady = true;
+  for (let i = 0; i < 3; i++) {
+    jing.hitstop = 0;
+    updateRolls(jing, ROLL_DT + 0.01);
+  }
+  if (jing.mirrorReady !== true) throw new Error('镜廊 roll-hop does not consume');
+  jing.waters = [];
+  explode(jing, jingBox.x + jingBox.w * 0.5, jingBox.y - 20, false);
+  if (!jingBox.open) throw new Error('镜廊 dry trail should open 心核');
+  takeCore(jing, { x: 100, y: 100 });
+  if (!jing.won || jing.toast !== TOAST.all) throw new Error('镜廊 should 通关');
+  const hudJing = makeState();
+  resetRoom(hudJing, 33, false);
+  if (roomHudText(hudJing) !== '镜廊 · 34/34') throw new Error('HUD 镜廊 34/34');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (MIRROR_DT !== 0.14) throw new Error('MIRROR_DT 0.14');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.mirrorGet !== '捡到镜爆') throw new Error('捡到镜爆');
+  if (TOAST.mirrorUse !== '对岸也炸了') throw new Error('对岸也炸了 toast');
+  if (TOAST.mirrorRoom !== '对岸清场') throw new Error('对岸清场');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
