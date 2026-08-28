@@ -28,6 +28,9 @@ const ROLL_N = 3;
 const ROLL_GAP = 90;
 const ROLL_DT = 0.16;
 const MIRROR_DT = 0.14;
+const SPIN_N = 4;
+const SPIN_R = 90;
+const SPIN_DT = 0.14;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -109,6 +112,7 @@ const NAMES = {
   bounce: '跳爆',
   roll: '卷爆',
   mirror: '镜爆',
+  spin: '旋爆',
   eater: '拾烬',
   shell: '壳卫',
 };
@@ -206,6 +210,9 @@ const TOAST = {
   mirrorGet: '捡到镜爆',
   mirrorUse: '对岸也炸了',
   mirrorRoom: '对岸清场',
+  spinGet: '捡到旋爆',
+  spinUse: '旋出去了',
+  spinRoom: '围着清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -234,6 +241,7 @@ const COL = {
   bounce: '#ff4ad2',
   roll: '#c86aff',
   mirror: '#6affc2',
+  spin: '#ff9a4a',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -468,6 +476,7 @@ function lootKind(drop) {
   if (drop === '跳爆' || drop === 'bounce') return 'bounce';
   if (drop === '卷爆' || drop === 'roll') return 'roll';
   if (drop === '镜爆' || drop === 'mirror') return 'mirror';
+  if (drop === '旋爆' || drop === 'spin') return 'spin';
   return null;
 }
 
@@ -535,6 +544,7 @@ function makeState() {
     bounceReady: false,
     rollReady: false,
     mirrorReady: false,
+    spinReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -542,6 +552,7 @@ function makeState() {
     bounceArcs: [],
     rolls: [],
     mirrors: [],
+    spins: [],
     echoes: [],
     echoing: false,
     splits: [],
@@ -607,6 +618,7 @@ function resetRoom(s, index, keepHearts) {
   s.bounceReady = false;
   s.rollReady = false;
   s.mirrorReady = false;
+  s.spinReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -631,6 +643,8 @@ function resetRoom(s, index, keepHearts) {
   s.rolls.length = 0;
   if (!s.mirrors) s.mirrors = [];
   s.mirrors.length = 0;
+  if (!s.spins) s.spins = [];
+  s.spins.length = 0;
   s.sparks.length = 0;
   s.items.length = 0;
   s.parts.length = 0;
@@ -740,6 +754,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '跳廊') toast(s, TOAST.bounceRoom, 1.4, COL.bounce);
   else if (room.name === '卷廊') toast(s, TOAST.rollRoom, 1.4, COL.roll);
   else if (room.name === '镜廊') toast(s, TOAST.mirrorRoom, 1.4, COL.mirror);
+  else if (room.name === '旋廊') toast(s, TOAST.spinRoom, 1.4, COL.spin);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1277,6 +1292,30 @@ function updateMirrors(s, dt) {
   }
 }
 
+function updateSpins(s, dt) {
+  if (!s.spins || !s.spins.length) return;
+  const fires = [];
+  for (let i = s.spins.length - 1; i >= 0; i--) {
+    const p = s.spins[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.spins.splice(i, 1);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 4, COL.spin, 160);
+    }
+  }
+}
+
 function updateDelays(s, dt) {
   if (!s.delays || !s.delays.length) return;
   const pops = [];
@@ -1374,6 +1413,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.mirrorReady) {
     s.mirrorReady = false;
     mirrored = true;
+  }
+  let spinning = false;
+  if (!forked && s.spinReady) {
+    s.spinReady = false;
+    spinning = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -1832,6 +1876,21 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, mx, my, 5, COL.mirror, 170);
     }
   }
+  if (spinning) {
+    if (!s.spins) s.spins = [];
+    for (let i = 0; i < SPIN_N; i++) {
+      const ang = -Math.PI / 2 + i * (Math.PI * 2 / SPIN_N);
+      const sx = clamp(x + Math.cos(ang) * SPIN_R, 0, s.roomW || VIEW_W);
+      const sy = clamp(y + Math.sin(ang) * SPIN_R, 0, s.roomH || VIEW_H);
+      s.spins.push({ x: sx, y: sy, t: SPIN_DT * (i + 1), ox: x, oy: y, i: i });
+    }
+    toast(s, TOAST.spinUse, 1.1, COL.spin);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 4, COL.spin, 170);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2088,6 +2147,7 @@ function watchSteer(s, dt) {
   let bounceIt = null;
   let rollIt = null;
   let mirrorIt = null;
+  let spinIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2109,8 +2169,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'bounce') bounceIt = it;
     if (it.kind === 'roll') rollIt = it;
     if (it.kind === 'mirror') mirrorIt = it;
+    if (it.kind === 'spin') spinIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt);
 
   let guard = null;
   let gd = 1e9;
@@ -2216,6 +2277,10 @@ function watchSteer(s, dt) {
   } else if (!s.mirrorReady && mirrorIt) {
     tx = mirrorIt.x - p.x;
     ty = mirrorIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.spinReady && spinIt) {
+    tx = spinIt.x - p.x;
+    ty = spinIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -2391,6 +2456,7 @@ function update(s, dt) {
     updateDelays(s, dt);
     updateRolls(s, dt);
     updateMirrors(s, dt);
+    updateSpins(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
   }
@@ -2407,6 +2473,7 @@ function update(s, dt) {
     updateDelays(s, dt);
     updateRolls(s, dt);
     updateMirrors(s, dt);
+    updateSpins(s, dt);
     return;
   }
 
@@ -2515,6 +2582,7 @@ function update(s, dt) {
   updateDelays(s, dt);
   updateRolls(s, dt);
   updateMirrors(s, dt);
+  updateSpins(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
@@ -2672,6 +2740,13 @@ function update(s, dt) {
       toast(s, TOAST.mirrorGet, 1.1, COL.mirror);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.mirror, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'spin') {
+      s.spinReady = true;
+      toast(s, TOAST.spinGet, 1.1, COL.spin);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.spin, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -3260,6 +3335,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.mirror, it.x, it.y - 16);
+    } else if (it.kind === 'spin') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.spin, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.spin;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.spin;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.spin, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -3532,6 +3622,52 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('镜', m.x, m.y - 12);
+    }
+  }
+
+  if (!reducedMotion() && s.spins && s.spins.length) {
+    const plant = s.spins[0];
+    const ox = plant.ox == null ? plant.x : plant.ox;
+    const oy = plant.oy == null ? plant.y : plant.oy;
+    ctx.strokeStyle = COL.spin;
+    ctx.globalAlpha = 0.22;
+    ctx.lineWidth = 1.4 / fit.scale;
+    ctx.setLineDash([6 / fit.scale, 5 / fit.scale]);
+    ctx.beginPath();
+    ctx.arc(ox, oy, SPIN_R, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < s.spins.length; i++) {
+      const p = s.spins[i];
+      const px = p.ox == null ? ox : p.ox;
+      const py = p.oy == null ? oy : p.oy;
+      ctx.strokeStyle = COL.spin;
+      ctx.globalAlpha = 0.28;
+      ctx.lineCap = 'round';
+      ctx.lineWidth = 1.6 / fit.scale;
+      ctx.setLineDash([6 / fit.scale, 5 / fit.scale]);
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      const pulse = 0.88 + 0.16 * (0.5 + 0.5 * Math.sin((s.time || 0) * 8 + i));
+      const rad = 8 * pulse;
+      glow(ctx, p.x, p.y, rad + 6, COL.spin, 0.35);
+      ctx.fillStyle = COL.spin;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad * 0.72, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.spin;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('旋', p.x, p.y - 12);
     }
   }
 
@@ -4104,6 +4240,27 @@ function draw(s, ctx) {
     ctx.arc(mx, my, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.spinReady) {
+    let sx;
+    let sy;
+    if (reducedMotion()) {
+      sx = p.x + 4;
+      sy = p.y - 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65;
+      sx = p.x + Math.cos(a) * 16;
+      sy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, sx, sy, 8, COL.spin, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.spin;
+    ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(sx, sy, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -4400,6 +4557,18 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (delayEl && s.mirrorReady && !s.delayReady) {
     delayEl.textContent = NAMES.mirror;
   }
+  const spinEl = (typeof document !== 'undefined') ? document.getElementById('spin') : null;
+  if (spinEl) {
+    spinEl.textContent = s.spinReady ? NAMES.spin : '';
+  } else if (mirrorEl && s.spinReady && !s.mirrorReady) {
+    mirrorEl.textContent = NAMES.spin;
+  } else if (rollEl && s.spinReady && !s.rollReady) {
+    rollEl.textContent = NAMES.spin;
+  } else if (bounceEl && s.spinReady && !s.bounceReady) {
+    bounceEl.textContent = NAMES.spin;
+  } else if (delayEl && s.spinReady && !s.delayReady) {
+    delayEl.textContent = NAMES.spin;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -4507,10 +4676,13 @@ function selfCheck() {
   if (ROLL_GAP !== 90) throw new Error('ROLL_GAP 90');
   if (ROLL_DT !== 0.16) throw new Error('ROLL_DT 0.16');
   if (MIRROR_DT !== 0.14) throw new Error('MIRROR_DT 0.14');
+  if (SPIN_N !== 4) throw new Error('SPIN_N 4');
+  if (SPIN_R !== 90) throw new Error('SPIN_R 90');
+  if (SPIN_DT !== 0.14) throw new Error('SPIN_DT 0.14');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 34) throw new Error('need 34 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊'];
+  if (!ROOMS || ROOMS.length !== 35) throw new Error('need 35 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -4568,6 +4740,8 @@ function selfCheck() {
   if (ROOMS[32].name !== '卷廊') throw new Error('room 33 卷廊');
   if (ROOMS[33].id !== 'jinglang') throw new Error('镜廊 id');
   if (ROOMS[33].name !== '镜廊') throw new Error('room 34 镜廊');
+  if (ROOMS[34].id !== 'xuanlang') throw new Error('旋廊 id');
+  if (ROOMS[34].name !== '旋廊') throw new Error('room 35 旋廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -4577,6 +4751,9 @@ function selfCheck() {
   if (NAMES.mirror !== '镜爆') throw new Error('NAMES.mirror');
   if (COL.mirror !== '#6affc2') throw new Error('COL.mirror');
   if (lootKind('镜爆') !== 'mirror' || lootKind('mirror') !== 'mirror') throw new Error('lootKind 镜爆');
+  if (NAMES.spin !== '旋爆') throw new Error('NAMES.spin');
+  if (COL.spin !== '#ff9a4a') throw new Error('COL.spin');
+  if (lootKind('旋爆') !== 'spin' || lootKind('spin') !== 'spin') throw new Error('lootKind 旋爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -4594,7 +4771,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '壳卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '壳卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -4751,10 +4928,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/34') throw new Error('HUD 空场 1/34');
+  if (roomHudText(hud0) !== '空场 · 1/35') throw new Error('HUD 空场 1/35');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/34') throw new Error('HUD 3/34');
+  if (roomHudText(hud2) !== '水巷 · 3/35') throw new Error('HUD 3/35');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -4966,7 +5143,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/34') throw new Error('HUD 灰径 11/34');
+  if (roomHudText(hudAsh) !== '灰径 · 11/35') throw new Error('HUD 灰径 11/35');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -4993,7 +5170,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/34') throw new Error('HUD 环行 12/34');
+  if (roomHudText(hudRing) !== '环行 · 12/35') throw new Error('HUD 环行 12/35');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -5022,7 +5199,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/34') throw new Error('HUD 密线 13/34');
+  if (roomHudText(hudWire) !== '密线 · 13/35') throw new Error('HUD 密线 13/35');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -5338,7 +5515,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/34') throw new Error('HUD 潮廊 14/34');
+  if (roomHudText(hudChao) !== '潮廊 · 14/35') throw new Error('HUD 潮廊 14/35');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -5408,7 +5585,7 @@ function selfCheck() {
   if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/34') throw new Error('HUD 种廊 15/34');
+  if (roomHudText(hudZhong) !== '种廊 · 15/35') throw new Error('HUD 种廊 15/35');
 
   if (NAMES.oil !== '油渍') throw new Error('油渍 name');
   if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
@@ -5535,7 +5712,7 @@ function selfCheck() {
   if (you.roomName !== '急廊') throw new Error('core advances to 急廊');
   const hudYou = makeState();
   resetRoom(hudYou, 15, false);
-  if (roomHudText(hudYou) !== '油廊 · 16/34') throw new Error('HUD 油廊 16/34');
+  if (roomHudText(hudYou) !== '油廊 · 16/35') throw new Error('HUD 油廊 16/35');
 
   if (NAMES.haste !== '急燃') throw new Error('急燃 name');
   if (COL.haste !== '#ff9a3c') throw new Error('COL.haste');
@@ -5613,7 +5790,7 @@ function selfCheck() {
   if (ji.roomName !== '拾廊') throw new Error('core advances to 拾廊');
   const hudJi = makeState();
   resetRoom(hudJi, 16, false);
-  if (roomHudText(hudJi) !== '急廊 · 17/34') throw new Error('HUD 急廊 17/34');
+  if (roomHudText(hudJi) !== '急廊 · 17/35') throw new Error('HUD 急廊 17/35');
 
   const hastePick = makeState();
   resetRoom(hastePick, 0, false);
@@ -5956,7 +6133,7 @@ function selfCheck() {
   if (shi.roomName !== '响廊') throw new Error('core advances to 响廊');
   const hudShi = makeState();
   resetRoom(hudShi, 17, false);
-  if (roomHudText(hudShi) !== '拾廊 · 18/34') throw new Error('HUD 拾廊 18/34');
+  if (roomHudText(hudShi) !== '拾廊 · 18/35') throw new Error('HUD 拾廊 18/35');
 
   if (NAMES.echo !== '回爆') throw new Error('回爆 name');
   if (COL.echo !== '#e8b45a') throw new Error('COL.echo');
@@ -6049,6 +6226,7 @@ function selfCheck() {
   if (lootKind('跳爆') !== 'bounce' || lootKind('bounce') !== 'bounce') throw new Error('lootKind 跳爆');
   if (lootKind('卷爆') !== 'roll' || lootKind('roll') !== 'roll') throw new Error('lootKind 卷爆');
   if (lootKind('镜爆') !== 'mirror' || lootKind('mirror') !== 'mirror') throw new Error('lootKind 镜爆');
+  if (lootKind('旋爆') !== 'spin' || lootKind('spin') !== 'spin') throw new Error('lootKind 旋爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -6227,7 +6405,7 @@ function selfCheck() {
   if (xiang.roomName !== '吸廊') throw new Error('core advances to 吸廊');
   const hudXiang = makeState();
   resetRoom(hudXiang, 18, false);
-  if (roomHudText(hudXiang) !== '响廊 · 19/34') throw new Error('HUD 响廊 19/34');
+  if (roomHudText(hudXiang) !== '响廊 · 19/35') throw new Error('HUD 响廊 19/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const suckA = makeState();
@@ -6419,7 +6597,7 @@ function selfCheck() {
   if (xi.roomName !== '冲廊') throw new Error('core advances to 冲廊');
   const hudXi = makeState();
   resetRoom(hudXi, 19, false);
-  if (roomHudText(hudXi) !== '吸廊 · 20/34') throw new Error('HUD 吸廊 20/34');
+  if (roomHudText(hudXi) !== '吸廊 · 20/35') throw new Error('HUD 吸廊 20/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const dashA = makeState();
@@ -6640,7 +6818,7 @@ function selfCheck() {
   if (chong.roomName !== '裂廊') throw new Error('core advances to 裂廊');
   const hudChong = makeState();
   resetRoom(hudChong, 20, false);
-  if (roomHudText(hudChong) !== '冲廊 · 21/34') throw new Error('HUD 冲廊 21/34');
+  if (roomHudText(hudChong) !== '冲廊 · 21/35') throw new Error('HUD 冲廊 21/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
 
   const splitDry = makeState();
@@ -6882,7 +7060,7 @@ function selfCheck() {
   if (lie.roomName !== '贯廊') throw new Error('core advances to 贯廊');
   const hudLie = makeState();
   resetRoom(hudLie, 21, false);
-  if (roomHudText(hudLie) !== '裂廊 · 22/34') throw new Error('HUD 裂廊 22/34');
+  if (roomHudText(hudLie) !== '裂廊 · 22/35') throw new Error('HUD 裂廊 22/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -7162,10 +7340,10 @@ function selfCheck() {
   if (guan.roomName !== '晕廊') throw new Error('core advances to 晕廊');
   const hudGuan = makeState();
   resetRoom(hudGuan, 22, false);
-  if (roomHudText(hudGuan) !== '贯廊 · 23/34') throw new Error('HUD 贯廊 23/34');
+  if (roomHudText(hudGuan) !== '贯廊 · 23/35') throw new Error('HUD 贯廊 23/35');
   const hudChong23 = makeState();
   resetRoom(hudChong23, 20, false);
-  if (roomHudText(hudChong23) !== '冲廊 · 21/34') throw new Error('HUD 冲廊 21/34');
+  if (roomHudText(hudChong23) !== '冲廊 · 21/35') throw new Error('HUD 冲廊 21/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (PIERCE_L !== 200) throw new Error('PIERCE_L 200');
@@ -8503,6 +8681,199 @@ function selfCheck() {
   if (mirrorPick.toast !== TOAST.mirrorGet) throw new Error('捡到镜爆 pick');
   if (Math.abs(mirrorX({ roomW: 960 }, 280) - 680) > 1e-9) throw new Error('mirrorX 960');
 
+  const spinTogether = makeState();
+  resetRoom(spinTogether, 0, false);
+  spinTogether.roomW = 960;
+  spinTogether.roomH = 400;
+  spinTogether.spinReady = true;
+  spinTogether.mirrorReady = true;
+  spinTogether.rollReady = true;
+  spinTogether.bounceReady = true;
+  spinTogether.player.x = 80;
+  spinTogether.player.y = 80;
+  spinTogether.player.inv = 1;
+  spinTogether.player.faceX = 1;
+  spinTogether.player.faceY = 0;
+  explode(spinTogether, 400, 200, false);
+  if (spinTogether.spinReady !== false) throw new Error('spin spends with bounce/roll/mirror');
+  if (spinTogether.mirrorReady !== false) throw new Error('mirror spends with spin');
+  if (spinTogether.rollReady !== false) throw new Error('roll spends with spin');
+  if (spinTogether.bounceReady !== false) throw new Error('bounce spends with spin');
+  if (!spinTogether.spins || spinTogether.spins.length !== 4) throw new Error('spin queues with others');
+  if (!spinTogether.mirrors || spinTogether.mirrors.length !== 1) throw new Error('mirror queues with spin');
+  if (!spinTogether.rolls || spinTogether.rolls.length !== 3) throw new Error('roll queues with spin');
+
+  const spinOn = makeState();
+  resetRoom(spinOn, 0, false);
+  spinOn.roomW = 960;
+  spinOn.roomH = 400;
+  spinOn.spinReady = true;
+  spinOn.dashBoomReady = true;
+  spinOn.hasteReady = true;
+  spinOn.player.x = 80;
+  spinOn.player.y = 80;
+  spinOn.player.inv = 1;
+  spinOn.enemies = [testFoe(400, 110), testFoe(490, 200), testFoe(400, 290), testFoe(310, 200)];
+  const spHp0 = spinOn.enemies[0].hp;
+  const spHp1 = spinOn.enemies[1].hp;
+  const spHp2 = spinOn.enemies[2].hp;
+  const spHp3 = spinOn.enemies[3].hp;
+  explode(spinOn, 400, 200, false);
+  if (spinOn.spinReady !== false) throw new Error('spinReady consumed on boom');
+  if (spinOn.dashBoomReady !== true) throw new Error('spin boom keeps 冲爆');
+  if (spinOn.hasteReady !== true) throw new Error('spin boom keeps 急燃');
+  if (spinOn.toast !== TOAST.spinUse) throw new Error('旋出去了');
+  if (!spinOn.spins || spinOn.spins.length !== 4) throw new Error('queues SPIN_N orbits');
+  const spinSeats = [
+    { x: 400, y: 110 },
+    { x: 490, y: 200 },
+    { x: 400, y: 290 },
+    { x: 310, y: 200 },
+  ];
+  for (let i = 0; i < spinSeats.length; i++) {
+    const seat = spinSeats[i];
+    const pending = spinOn.spins.find(function (p) { return dist(p.x, p.y, seat.x, seat.y) < 2; });
+    if (!pending) throw new Error('spin pending seat ' + i);
+    if (Math.abs(pending.t - SPIN_DT * (pending.i + 1)) > 1e-9) throw new Error('spin dt ' + i);
+  }
+  if (spinOn.enemies[0].hp !== spHp0 || spinOn.enemies[1].hp !== spHp1 || spinOn.enemies[2].hp !== spHp2 || spinOn.enemies[3].hp !== spHp3) {
+    throw new Error('spin not instant');
+  }
+  spinOn.hitstop = 0;
+  update(spinOn, SPIN_DT * SPIN_N + 0.05);
+  if (spinOn.spins.length !== 0) throw new Error('spin orbits fire');
+  if (!(spinOn.enemies[0].hp < spHp0 || spinOn.enemies[0].hp <= 0)) throw new Error('spin hot dmg 0');
+  if (!(spinOn.enemies[1].hp < spHp1 || spinOn.enemies[1].hp <= 0)) throw new Error('spin hot dmg 1');
+  if (!(spinOn.enemies[2].hp < spHp2 || spinOn.enemies[2].hp <= 0)) throw new Error('spin hot dmg 2');
+  if (!(spinOn.enemies[3].hp < spHp3 || spinOn.enemies[3].hp <= 0)) throw new Error('spin hot dmg 3');
+
+  const spinTick = makeState();
+  resetRoom(spinTick, 0, false);
+  spinTick.roomW = 960;
+  spinTick.roomH = 400;
+  spinTick.spinReady = true;
+  spinTick.player.x = 80;
+  spinTick.player.y = 80;
+  spinTick.player.inv = 1;
+  spinTick.enemies = [testFoe(400, 110), testFoe(490, 200), testFoe(400, 290), testFoe(310, 200)];
+  const tickS0 = spinTick.enemies[0].hp;
+  const tickS1 = spinTick.enemies[1].hp;
+  const tickS2 = spinTick.enemies[2].hp;
+  const tickS3 = spinTick.enemies[3].hp;
+  explode(spinTick, 400, 200, false);
+  if (spinTick.spinReady !== false) throw new Error('spinTick consumed');
+  if (!spinTick.spins || spinTick.spins.length !== 4) throw new Error('spinTick queues 4');
+  if (spinTick.toast !== TOAST.spinUse) throw new Error('旋出去了 tick');
+  for (let i = 0; i < 50; i++) {
+    spinTick.hitstop = 0;
+    update(spinTick, 0.016);
+  }
+  if (!(spinTick.enemies[0].hp < tickS0 || spinTick.enemies[0].hp <= 0)) throw new Error('spin update dmg 0');
+  if (!(spinTick.enemies[1].hp < tickS1 || spinTick.enemies[1].hp <= 0)) throw new Error('spin update dmg 1');
+  if (!(spinTick.enemies[2].hp < tickS2 || spinTick.enemies[2].hp <= 0)) throw new Error('spin update dmg 2');
+  if (!(spinTick.enemies[3].hp < tickS3 || spinTick.enemies[3].hp <= 0)) throw new Error('spin update dmg 3');
+
+  const spinWet = makeState();
+  resetRoom(spinWet, 0, false);
+  spinWet.spinReady = true;
+  spinWet.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(spinWet, 120, 120, false);
+  if (!spinWet.sparks[0].wet) throw new Error('spin wet spark');
+  for (let i = 0; i < 24; i++) update(spinWet, 0.1);
+  if (spinWet.spinReady !== true) throw new Error('wet keeps 旋爆');
+  if (spinWet.stats.booms !== 0) throw new Error('wet spin no boom');
+  if (spinWet.spins && spinWet.spins.length) throw new Error('wet does not queue spin');
+
+  const spinKeepDrop = makeState();
+  resetRoom(spinKeepDrop, 0, false);
+  spinKeepDrop.spinReady = true;
+  dropSpark(spinKeepDrop, 200, 200, false);
+  if (spinKeepDrop.spinReady !== true) throw new Error('dropSpark keeps 旋爆');
+  spinKeepDrop.player.x = 80;
+  spinKeepDrop.player.y = 80;
+  spinKeepDrop.input.dash = true;
+  update(spinKeepDrop, 0.016);
+  if (spinKeepDrop.spinReady !== true) throw new Error('dash keeps 旋爆');
+  spinKeepDrop.player.dashT = 0;
+  spinKeepDrop.player.dashCd = 0;
+  spinKeepDrop.hitstop = 0;
+  spinKeepDrop.dashBoomReady = true;
+  spinKeepDrop.input.dash = true;
+  update(spinKeepDrop, 0.016);
+  if (spinKeepDrop.spinReady !== true) throw new Error('冲爆 keeps 旋爆');
+  if (spinKeepDrop.dashBoomReady !== false) throw new Error('冲爆 still spends with spin');
+
+  const spinSatKeep = makeState();
+  resetRoom(spinSatKeep, 0, false);
+  spinSatKeep.splitReady = true;
+  spinSatKeep.player.faceX = 1;
+  spinSatKeep.player.faceY = 0;
+  explode(spinSatKeep, 400, 200, false);
+  spinSatKeep.spinReady = true;
+  spinSatKeep.mirrorReady = true;
+  for (let i = 0; i < 10; i++) update(spinSatKeep, 0.05);
+  if (spinSatKeep.spinReady !== true) throw new Error('satellite keeps spin');
+  if (spinSatKeep.spins && spinSatKeep.spins.length) throw new Error('satellite does not queue spin');
+  if (spinSatKeep.mirrorReady !== true) throw new Error('satellite keeps mirror with spin');
+
+  const spinEchoKeep = makeState();
+  resetRoom(spinEchoKeep, 0, false);
+  spinEchoKeep.echoReady = true;
+  explode(spinEchoKeep, 400, 200, false);
+  spinEchoKeep.spinReady = true;
+  for (let i = 0; i < 12; i++) update(spinEchoKeep, 0.05);
+  if (spinEchoKeep.spinReady !== true) throw new Error('echo boom keeps spin');
+  if (spinEchoKeep.spins && spinEchoKeep.spins.length) throw new Error('echo boom does not queue spin');
+
+  const spinForkKeep = makeState();
+  resetRoom(spinForkKeep, 0, false);
+  spinForkKeep.spinReady = true;
+  spinForkKeep.mirrorReady = true;
+  explode(spinForkKeep, 200, 200, false, false, false, { fork: true });
+  if (spinForkKeep.spinReady !== true) throw new Error('forked boom keeps spin');
+  if (spinForkKeep.spins && spinForkKeep.spins.length) throw new Error('forked boom does not queue spin');
+  if (spinForkKeep.mirrorReady !== true) throw new Error('forked boom keeps mirror with spin');
+
+  const spinHopKeep = makeState();
+  resetRoom(spinHopKeep, 0, false);
+  spinHopKeep.player.faceX = 1;
+  spinHopKeep.player.faceY = 0;
+  spinHopKeep.player.x = 80;
+  spinHopKeep.player.y = 80;
+  spinHopKeep.player.inv = 1;
+  spinHopKeep.rollReady = true;
+  explode(spinHopKeep, 340, 200, false);
+  spinHopKeep.spinReady = true;
+  for (let i = 0; i < 3; i++) {
+    spinHopKeep.hitstop = 0;
+    updateRolls(spinHopKeep, ROLL_DT + 0.01);
+  }
+  if (spinHopKeep.spinReady !== true) throw new Error('roll-hop keeps spin');
+  if (spinHopKeep.spins && spinHopKeep.spins.length) throw new Error('roll-hop does not queue spin');
+
+  const spinMirrorKeep = makeState();
+  resetRoom(spinMirrorKeep, 0, false);
+  spinMirrorKeep.roomW = 960;
+  spinMirrorKeep.roomH = 400;
+  spinMirrorKeep.player.x = 80;
+  spinMirrorKeep.player.y = 80;
+  spinMirrorKeep.player.inv = 1;
+  spinMirrorKeep.mirrorReady = true;
+  explode(spinMirrorKeep, 280, 200, false);
+  spinMirrorKeep.spinReady = true;
+  spinMirrorKeep.hitstop = 0;
+  updateMirrors(spinMirrorKeep, MIRROR_DT + 0.01);
+  if (spinMirrorKeep.spinReady !== true) throw new Error('mirror-reflection keeps spin');
+  if (spinMirrorKeep.spins && spinMirrorKeep.spins.length) throw new Error('mirror-reflection does not queue spin');
+
+  const spinPick = makeState();
+  resetRoom(spinPick, 0, false);
+  if (spinPick.spinReady) throw new Error('spin starts false');
+  spinPick.items.push({ kind: 'spin', x: spinPick.player.x, y: spinPick.player.y, r: 10, taken: false });
+  update(spinPick, 0.016);
+  if (spinPick.spinReady !== true) throw new Error('pick 旋爆');
+  if (spinPick.toast !== TOAST.spinGet) throw new Error('捡到旋爆 pick');
+
   const yun = makeState();
   resetRoom(yun, 23, false);
   if (yun.roomName !== '晕廊' || yun.roomId !== 'yunlang') throw new Error('yunlang load');
@@ -8622,10 +8993,10 @@ function selfCheck() {
   if (yun.roomName !== '冻廊') throw new Error('core advances to 冻廊');
   const hudYun = makeState();
   resetRoom(hudYun, 23, false);
-  if (roomHudText(hudYun) !== '晕廊 · 24/34') throw new Error('HUD 晕廊 24/34');
+  if (roomHudText(hudYun) !== '晕廊 · 24/35') throw new Error('HUD 晕廊 24/35');
   const hudLie24 = makeState();
   resetRoom(hudLie24, 21, false);
-  if (roomHudText(hudLie24) !== '裂廊 · 22/34') throw new Error('HUD 裂廊 22/34');
+  if (roomHudText(hudLie24) !== '裂廊 · 22/35') throw new Error('HUD 裂廊 22/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (RING_IN !== 40) throw new Error('RING_IN 40');
@@ -8765,7 +9136,7 @@ function selfCheck() {
   if (dong.roomName !== '推廊') throw new Error('core advances to 推廊');
   const hudDong = makeState();
   resetRoom(hudDong, 24, false);
-  if (roomHudText(hudDong) !== '冻廊 · 25/34') throw new Error('HUD 冻廊 25/34');
+  if (roomHudText(hudDong) !== '冻廊 · 25/35') throw new Error('HUD 冻廊 25/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (FROST_T !== 1.8) throw new Error('FROST_T 1.8');
@@ -8920,7 +9291,7 @@ function selfCheck() {
   if (tui.roomName !== '诱廊') throw new Error('core advances to 诱廊');
   const hudTui = makeState();
   resetRoom(hudTui, 25, false);
-  if (roomHudText(hudTui) !== '推廊 · 26/34') throw new Error('HUD 推廊 26/34');
+  if (roomHudText(hudTui) !== '推廊 · 26/35') throw new Error('HUD 推廊 26/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHOVE_V !== 280) throw new Error('SHOVE_V 280');
@@ -9070,7 +9441,7 @@ function selfCheck() {
   if (yin.roomName !== '壳廊') throw new Error('core advances to 壳廊');
   const hudYin = makeState();
   resetRoom(hudYin, 26, false);
-  if (roomHudText(hudYin) !== '诱廊 · 27/34') throw new Error('HUD 诱廊 27/34');
+  if (roomHudText(hudYin) !== '诱廊 · 27/35') throw new Error('HUD 诱廊 27/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BAIT_T !== 2.0) throw new Error('BAIT_T 2.0');
@@ -9189,7 +9560,7 @@ function selfCheck() {
   if (qiao.roomName !== '雷廊') throw new Error('core advances to 雷廊');
   const hudQiao = makeState();
   resetRoom(hudQiao, 27, false);
-  if (roomHudText(hudQiao) !== '壳廊 · 28/34') throw new Error('HUD 壳廊 28/34');
+  if (roomHudText(hudQiao) !== '壳廊 · 28/35') throw new Error('HUD 壳廊 28/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
@@ -9364,7 +9735,7 @@ function selfCheck() {
   if (lei.roomName !== '绊廊') throw new Error('core advances to 绊廊');
   const hudLei = makeState();
   resetRoom(hudLei, 28, false);
-  if (roomHudText(hudLei) !== '雷廊 · 29/34') throw new Error('HUD 雷廊 29/34');
+  if (roomHudText(hudLei) !== '雷廊 · 29/35') throw new Error('HUD 雷廊 29/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BOLT_R !== 170) throw new Error('BOLT_R 170');
@@ -9552,7 +9923,7 @@ function selfCheck() {
   if (ban.roomName !== '迟廊') throw new Error('core advances to 迟廊');
   const hudBan = makeState();
   resetRoom(hudBan, 29, false);
-  if (roomHudText(hudBan) !== '绊廊 · 30/34') throw new Error('HUD 绊廊 30/34');
+  if (roomHudText(hudBan) !== '绊廊 · 30/35') throw new Error('HUD 绊廊 30/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (TRIP_R !== 16) throw new Error('TRIP_R 16');
@@ -9759,7 +10130,7 @@ function selfCheck() {
   if (chi.roomName !== '跳廊') throw new Error('core advances to 跳廊');
   const hudChi = makeState();
   resetRoom(hudChi, 30, false);
-  if (roomHudText(hudChi) !== '迟廊 · 31/34') throw new Error('HUD 迟廊 31/34');
+  if (roomHudText(hudChi) !== '迟廊 · 31/35') throw new Error('HUD 迟廊 31/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (DELAY_T !== 1.2) throw new Error('DELAY_T 1.2');
@@ -9925,7 +10296,7 @@ function selfCheck() {
   if (tiao.roomName !== '卷廊') throw new Error('core advances to 卷廊');
   const hudTiao = makeState();
   resetRoom(hudTiao, 31, false);
-  if (roomHudText(hudTiao) !== '跳廊 · 32/34') throw new Error('HUD 跳廊 32/34');
+  if (roomHudText(hudTiao) !== '跳廊 · 32/35') throw new Error('HUD 跳廊 32/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (BOUNCE_R !== 150) throw new Error('BOUNCE_R 150');
@@ -10107,7 +10478,7 @@ function selfCheck() {
   if (juan.roomName !== '镜廊') throw new Error('core advances to 镜廊');
   const hudJuan = makeState();
   resetRoom(hudJuan, 32, false);
-  if (roomHudText(hudJuan) !== '卷廊 · 33/34') throw new Error('HUD 卷廊 33/34');
+  if (roomHudText(hudJuan) !== '卷廊 · 33/35') throw new Error('HUD 卷廊 33/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (ROLL_N !== 3) throw new Error('ROLL_N 3');
@@ -10301,10 +10672,12 @@ function selfCheck() {
   explode(jing, jingBox.x + jingBox.w * 0.5, jingBox.y - 20, false);
   if (!jingBox.open) throw new Error('镜廊 dry trail should open 心核');
   takeCore(jing, { x: 100, y: 100 });
-  if (!jing.won || jing.toast !== TOAST.all) throw new Error('镜廊 should 通关');
+  if (jing.won) throw new Error('镜廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(jing, 0.1);
+  if (jing.roomName !== '旋廊') throw new Error('core advances to 旋廊');
   const hudJing = makeState();
   resetRoom(hudJing, 33, false);
-  if (roomHudText(hudJing) !== '镜廊 · 34/34') throw new Error('HUD 镜廊 34/34');
+  if (roomHudText(hudJing) !== '镜廊 · 34/35') throw new Error('HUD 镜廊 34/35');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
   if (MIRROR_DT !== 0.14) throw new Error('MIRROR_DT 0.14');
@@ -10313,6 +10686,226 @@ function selfCheck() {
   if (TOAST.mirrorGet !== '捡到镜爆') throw new Error('捡到镜爆');
   if (TOAST.mirrorUse !== '对岸也炸了') throw new Error('对岸也炸了 toast');
   if (TOAST.mirrorRoom !== '对岸清场') throw new Error('对岸清场');
+
+  const xuan = makeState();
+  resetRoom(xuan, 34, false);
+  if (xuan.roomName !== '旋廊' || xuan.roomId !== 'xuanlang') throw new Error('xuanlang load');
+  if (xuan.toast !== TOAST.spinRoom) throw new Error('旋廊 intro');
+  if (xuan.roomW !== 960 || xuan.roomH !== 400) throw new Error('旋廊 size');
+  if (xuan.player.x !== 80 || xuan.player.y !== 200) throw new Error('旋廊 spawn');
+  if (xuan.spinReady) throw new Error('旋廊 spin starts false');
+  if (xuan.spins && xuan.spins.length) throw new Error('旋廊 spins start empty');
+  let xuanStill = 0;
+  let xuanTide = 0;
+  for (let i = 0; i < xuan.waters.length; i++) {
+    if (xuan.waters[i].tide) xuanTide += 1;
+    else xuanStill += 1;
+  }
+  if (xuanStill < 1) throw new Error('旋廊 needs static 水洼');
+  if (xuanTide) throw new Error('旋廊 no tide');
+  let xuanCore = 0;
+  let xuanHeal = 0;
+  let xuanThick = 0;
+  let xuanSpinItem = 0;
+  let xuanMirrorItem = 0;
+  let xuanRollItem = 0;
+  let xuanBounceItem = 0;
+  let xuanDelayItem = 0;
+  let xuanTripItem = 0;
+  let xuanBoltItem = 0;
+  let xuanBaitItem = 0;
+  let xuanShoveItem = 0;
+  let xuanFrostItem = 0;
+  let xuanHaloItem = 0;
+  let xuanPierceItem = 0;
+  let xuanSplitItem = 0;
+  let xuanDashItem = 0;
+  let xuanSuckItem = 0;
+  let xuanEchoItem = 0;
+  let xuanHasteItem = 0;
+  let xuanSeedItem = 0;
+  for (let i = 0; i < xuan.crates.length; i++) {
+    if (xuan.crates[i].loot === 'core') xuanCore += 1;
+    if (xuan.crates[i].loot === 'heal') xuanHeal += 1;
+    if (xuan.crates[i].thick) xuanThick += 1;
+  }
+  for (let i = 0; i < xuan.items.length; i++) {
+    if (xuan.items[i].kind === 'spin') xuanSpinItem += 1;
+    if (xuan.items[i].kind === 'mirror') xuanMirrorItem += 1;
+    if (xuan.items[i].kind === 'roll') xuanRollItem += 1;
+    if (xuan.items[i].kind === 'bounce') xuanBounceItem += 1;
+    if (xuan.items[i].kind === 'delay') xuanDelayItem += 1;
+    if (xuan.items[i].kind === 'trip') xuanTripItem += 1;
+    if (xuan.items[i].kind === 'bolt') xuanBoltItem += 1;
+    if (xuan.items[i].kind === 'bait') xuanBaitItem += 1;
+    if (xuan.items[i].kind === 'shove') xuanShoveItem += 1;
+    if (xuan.items[i].kind === 'frost') xuanFrostItem += 1;
+    if (xuan.items[i].kind === 'halo') xuanHaloItem += 1;
+    if (xuan.items[i].kind === 'pierce') xuanPierceItem += 1;
+    if (xuan.items[i].kind === 'split') xuanSplitItem += 1;
+    if (xuan.items[i].kind === 'dashboom') xuanDashItem += 1;
+    if (xuan.items[i].kind === 'suck') xuanSuckItem += 1;
+    if (xuan.items[i].kind === 'echo') xuanEchoItem += 1;
+    if (xuan.items[i].kind === 'haste') xuanHasteItem += 1;
+    if (xuan.items[i].kind === 'seed') xuanSeedItem += 1;
+  }
+  if (xuanSpinItem < 1) throw new Error('旋廊 needs 旋爆');
+  if (xuanMirrorItem || xuanRollItem || xuanBounceItem || xuanDelayItem || xuanTripItem || xuanBoltItem || xuanBaitItem || xuanShoveItem || xuanFrostItem || xuanHaloItem || xuanPierceItem || xuanSplitItem || xuanDashItem || xuanSuckItem || xuanEchoItem || xuanHasteItem || xuanSeedItem) {
+    throw new Error('旋廊 no 焰种/急燃/回爆/吸爆/冲爆/裂爆/贯爆/环爆/霜爆/推爆/诱爆/雷爆/绊爆/迟爆/跳爆/卷爆/镜爆');
+  }
+  if (xuanCore !== 1) throw new Error('旋廊 心核');
+  if (xuanHeal < 1) throw new Error('旋廊 回星');
+  const xuanBox = xuan.crates.find(function (c) { return c.loot === 'core'; });
+  if (!xuanBox || xuanBox.thick) throw new Error('旋廊 心核 crate is not thick');
+  if (xuanThick) throw new Error('旋廊 no thick crate');
+  let xuanHound = 0;
+  let xuanGuard = 0;
+  let xuanMoth = 0;
+  let xuanEater = 0;
+  let xuanShell = 0;
+  for (let i = 0; i < xuan.enemies.length; i++) {
+    if (isHound(xuan.enemies[i])) xuanHound += 1;
+    else if (isMoth(xuan.enemies[i])) xuanMoth += 1;
+    else if (isEater(xuan.enemies[i])) xuanEater += 1;
+    else if (isShell(xuan.enemies[i])) xuanShell += 1;
+    else xuanGuard += 1;
+  }
+  if (xuanGuard !== 4 || xuanHound !== 0 || xuanMoth !== 0 || xuanEater !== 0 || xuanShell !== 0) {
+    throw new Error('旋廊 烬卫 only');
+  }
+  if (inWater(xuan, 80, 200) || inOil(xuan, 80, 200)) throw new Error('旋廊 spawn dry');
+  if (inWater(xuan, 240, 200) || inOil(xuan, 240, 200)) throw new Error('旋廊 旋爆 dry');
+  if (inOil(xuan, 860, 188) || inWater(xuan, 860, 188)) throw new Error('旋廊 core dry');
+  if (inWater(xuan, 400, 200) || inOil(xuan, 400, 200)) throw new Error('旋廊 plant dry');
+  if (inWater(xuan, 400, 110) || inOil(xuan, 400, 110)) throw new Error('旋廊 orbit N wet/oil');
+  if (inWater(xuan, 490, 200) || inOil(xuan, 490, 200)) throw new Error('旋廊 orbit E wet/oil');
+  if (inWater(xuan, 400, 290) || inOil(xuan, 400, 290)) throw new Error('旋廊 orbit S wet/oil');
+  if (inWater(xuan, 310, 200) || inOil(xuan, 310, 200)) throw new Error('旋廊 orbit W wet/oil');
+  if (!inWater(xuan, 670, 350)) throw new Error('旋廊 wet bag');
+  if (inWater(xuan, 400, 100)) throw new Error('旋廊 north shelf wet');
+  for (let i = 0; i < xuan.crates.length; i++) {
+    const c = xuan.crates[i];
+    if (circleRect(xuan.player.x, xuan.player.y, xuan.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('旋廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 420; x += 10) {
+    for (let i = 0; i < xuan.crates.length; i++) {
+      const c = xuan.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('旋廊 crate on dry walk');
+      }
+    }
+  }
+  for (let i = 0; i < xuan.enemies.length; i++) {
+    const e = xuan.enemies[i];
+    if (dist(e.x, e.y, 80, 200) < 80) throw new Error('旋廊 foe too close to spawn');
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (!(dPlant > HOT_BLAST_R)) throw new Error('旋廊 烬卫 outside plant blast');
+  }
+  const xuanN = xuan.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 110) < 1; });
+  const xuanE = xuan.enemies.find(function (e) { return Math.abs(e.x - 490) < 1 && Math.abs(e.y - 200) < 1; });
+  const xuanS = xuan.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 290) < 1; });
+  const xuanW = xuan.enemies.find(function (e) { return Math.abs(e.x - 310) < 1 && Math.abs(e.y - 200) < 1; });
+  if (!xuanN || !xuanE || !xuanS || !xuanW) throw new Error('旋廊 ring 烬卫');
+  const xuanCoreCx = xuanBox.x + xuanBox.w * 0.5;
+  const xuanCoreCy = xuanBox.y + xuanBox.h * 0.5;
+  if (!(dist(xuanCoreCx, xuanCoreCy, 490, 200) > HOT_BLAST_R)) throw new Error('旋廊 core outside orbit blast');
+  xuan.player.x = 80;
+  xuan.player.y = 80;
+  xuan.player.hearts = 3;
+  xuan.player.inv = 0;
+  xuan.hitstop = 0;
+  xuan.embers.length = 0;
+  const xuanGround = xuan.items.find(function (it) { return it.kind === 'spin' && !it.taken; });
+  if (!xuanGround) throw new Error('旋廊 ground 旋爆 present');
+  xuan.player.x = xuanGround.x;
+  xuan.player.y = xuanGround.y;
+  update(xuan, 0.016);
+  if (xuan.spinReady !== true) throw new Error('pick spin → spinReady');
+  if (xuan.toast !== TOAST.spinGet) throw new Error('捡到旋爆 room');
+  xuan.player.x = 80;
+  xuan.player.y = 80;
+  xuan.player.inv = 1;
+  xuan.hitstop = 0;
+  xuan.embers.length = 0;
+  const xuanHpN = xuanN.hp;
+  const xuanHpE = xuanE.hp;
+  const xuanHpS = xuanS.hp;
+  const xuanHpW = xuanW.hp;
+  explode(xuan, 400, 200, false);
+  if (xuan.spinReady) throw new Error('旋廊 spin spends');
+  if (xuan.toast !== TOAST.spinUse) throw new Error('旋出去了 room');
+  if (!xuan.spins || xuan.spins.length !== 4) throw new Error('旋廊 queues 4 spins');
+  const xuanSeats = [
+    { x: 400, y: 110 },
+    { x: 490, y: 200 },
+    { x: 400, y: 290 },
+    { x: 310, y: 200 },
+  ];
+  for (let i = 0; i < xuanSeats.length; i++) {
+    const seat = xuanSeats[i];
+    const pending = xuan.spins.find(function (p) { return dist(p.x, p.y, seat.x, seat.y) < 2; });
+    if (!pending) throw new Error('旋廊 pending seat ' + i);
+  }
+  if (xuanN.hp !== xuanHpN || xuanE.hp !== xuanHpE || xuanS.hp !== xuanHpS || xuanW.hp !== xuanHpW) {
+    throw new Error('旋廊 spin not instant');
+  }
+  xuan.hitstop = 0;
+  updateSpins(xuan, SPIN_DT * SPIN_N + 0.05);
+  if (xuan.spins.length !== 0) throw new Error('旋廊 orbits fire');
+  if (!(xuanN.hp < xuanHpN || xuanN.hp <= 0)) throw new Error('旋廊 spin hot dmg N');
+  if (!(xuanE.hp < xuanHpE || xuanE.hp <= 0)) throw new Error('旋廊 spin hot dmg E');
+  if (!(xuanS.hp < xuanHpS || xuanS.hp <= 0)) throw new Error('旋廊 spin hot dmg S');
+  if (!(xuanW.hp < xuanHpW || xuanW.hp <= 0)) throw new Error('旋廊 spin hot dmg W');
+  xuan.spinReady = true;
+  xuan.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(xuan, 120, 120, false);
+  if (!xuan.sparks[xuan.sparks.length - 1].wet) throw new Error('旋廊 wet spark');
+  const xuanBooms = xuan.stats.booms;
+  for (let i = 0; i < 24; i++) update(xuan, 0.1);
+  if (xuan.spinReady !== true) throw new Error('旋廊 wet fizzle does not consume');
+  if (xuan.stats.booms !== xuanBooms) throw new Error('旋廊 wet no extra boom');
+  xuan.waters = [];
+  explode(xuan, 200, 200, false, false, false, { fork: true });
+  if (xuan.spinReady !== true) throw new Error('旋廊 fork does not consume');
+  xuan.echoReady = true;
+  explode(xuan, 200, 200, false);
+  xuan.spinReady = true;
+  for (let i = 0; i < 12; i++) update(xuan, 0.05);
+  if (xuan.spinReady !== true) throw new Error('旋廊 echo does not consume');
+  xuan.rollReady = true;
+  explode(xuan, 200, 200, false);
+  xuan.spinReady = true;
+  for (let i = 0; i < 3; i++) {
+    xuan.hitstop = 0;
+    updateRolls(xuan, ROLL_DT + 0.01);
+  }
+  if (xuan.spinReady !== true) throw new Error('旋廊 roll-hop does not consume');
+  xuan.mirrorReady = true;
+  explode(xuan, 200, 200, false);
+  xuan.spinReady = true;
+  xuan.hitstop = 0;
+  updateMirrors(xuan, MIRROR_DT + 0.01);
+  if (xuan.spinReady !== true) throw new Error('旋廊 mirror-reflection does not consume');
+  xuan.waters = [];
+  explode(xuan, xuanBox.x + xuanBox.w * 0.5, xuanBox.y - 20, false);
+  if (!xuanBox.open) throw new Error('旋廊 dry trail should open 心核');
+  takeCore(xuan, { x: 100, y: 100 });
+  if (!xuan.won || xuan.toast !== TOAST.all) throw new Error('旋廊 should 通关');
+  const hudXuan = makeState();
+  resetRoom(hudXuan, 34, false);
+  if (roomHudText(hudXuan) !== '旋廊 · 35/35') throw new Error('HUD 旋廊 35/35');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (SPIN_N !== 4) throw new Error('SPIN_N 4');
+  if (SPIN_R !== 90) throw new Error('SPIN_R 90');
+  if (SPIN_DT !== 0.14) throw new Error('SPIN_DT 0.14');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.spinGet !== '捡到旋爆') throw new Error('捡到旋爆');
+  if (TOAST.spinUse !== '旋出去了') throw new Error('旋出去了 toast');
+  if (TOAST.spinRoom !== '围着清场') throw new Error('围着清场');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
