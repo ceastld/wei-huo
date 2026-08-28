@@ -1,0 +1,19 @@
+/* 尾火 · 夜市纸色。无 CDN，系统字体。 */
+:root {
+  --bg: #14080a;      /* 夜底 */
+  --ember: #ff6a1a;   /* 焰辙 */
+  --gold: #ffd24a;    /* 爆光 */
+  --water: #3a6b8c;   /* 水洼 */
+  --core: #ff5d8f;    /* 心核 */
+  --ash: #6b5344;     /* 烬灰 */
+  --heart: #ff5d8f;   /* 心 */
+  --font: system-ui, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--gold);
+  font-family: var(--font);
+}
