@@ -64,6 +64,8 @@ const CROSS_N = 3;
 const CROSS_D = 150;
 const CROSS_GAP = 30;
 const CROSS_DT = 0.14;
+const FRAME_S = 120;
+const FRAME_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -159,6 +161,7 @@ const NAMES = {
   wave: '波爆',
   star: '星爆',
   cross: '叉爆',
+  frame: '框爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -290,6 +293,9 @@ const TOAST = {
   crossGet: '捡到叉爆',
   crossUse: '十字散开了',
   crossRoom: '十字清场',
+  frameGet: '捡到框爆',
+  frameUse: '方框绘开了',
+  frameRoom: '方框清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -332,6 +338,7 @@ const COL = {
   wave: '#ff8f5a',
   star: '#ffd24a',
   cross: '#ff5ea8',
+  frame: '#7cffd4',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -592,6 +599,7 @@ function lootKind(drop) {
   if (drop === '波爆' || drop === 'wave') return 'wave';
   if (drop === '星爆' || drop === 'star') return 'star';
   if (drop === '叉爆' || drop === 'cross') return 'cross';
+  if (drop === '框爆' || drop === 'frame') return 'frame';
   return null;
 }
 
@@ -669,6 +677,7 @@ function makeState() {
     waveReady: false,
     starReady: false,
     crossReady: false,
+    frameReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -685,6 +694,7 @@ function makeState() {
     waves: [],
     stars: [],
     crosses: [],
+    frames: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -812,6 +822,7 @@ function resetRoom(s, index, keepHearts) {
   s.waveReady = false;
   s.starReady = false;
   s.crossReady = false;
+  s.frameReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -854,6 +865,8 @@ function resetRoom(s, index, keepHearts) {
   s.stars.length = 0;
   if (!s.crosses) s.crosses = [];
   s.crosses.length = 0;
+  if (!s.frames) s.frames = [];
+  s.frames.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -978,6 +991,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '波廊') toast(s, TOAST.waveRoom, 1.4, COL.wave);
   else if (room.name === '星廊') toast(s, TOAST.starRoom, 1.4, COL.star);
   else if (room.name === '叉廊') toast(s, TOAST.crossRoom, 1.4, COL.cross);
+  else if (room.name === '框廊') toast(s, TOAST.frameRoom, 1.4, COL.frame);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1760,6 +1774,38 @@ function updateCrosses(s, dt) {
   }
 }
 
+function updateFrames(s, dt) {
+  if (!s.frames || !s.frames.length) return;
+  const fires = [];
+  for (let i = s.frames.length - 1; i >= 0; i--) {
+    const p = s.frames[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.frames.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.frame, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    const ox = p.ox != null ? p.ox : hx;
+    const oy = p.oy != null ? p.oy : hy;
+    const corner = Math.abs(Math.abs(hx - ox) - FRAME_S) < 1 && Math.abs(Math.abs(hy - oy) - FRAME_S) < 1;
+    const n = corner ? 3 : 1;
+    for (let k = 0; k < n; k++) {
+      explode(s, hx, hy, true, true, false, { fork: true });
+    }
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.frame, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -1962,6 +2008,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.crossReady) {
     s.crossReady = false;
     crossing = true;
+  }
+  let framing = false;
+  if (!forked && s.frameReady) {
+    s.frameReady = false;
+    framing = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2573,6 +2624,28 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 160);
     }
   }
+  if (framing) {
+    if (!s.frames) s.frames = [];
+    const dirs = [
+      [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1],
+    ];
+    for (let i = 0; i < dirs.length; i++) {
+      s.frames.push({
+        x: x + dirs[i][0] * FRAME_S,
+        y: y + dirs[i][1] * FRAME_S,
+        t: FRAME_DT * (i + 1),
+        ox: x,
+        oy: y,
+      });
+    }
+    toast(s, TOAST.frameUse, 1.1, COL.frame);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.frame, 170);
+      burst(s, x, y, 4, COL.gold, 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2850,6 +2923,7 @@ function watchSteer(s, dt) {
   let waveIt = null;
   let starIt = null;
   let crossIt = null;
+  let frameIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2881,8 +2955,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'wave') waveIt = it;
     if (it.kind === 'star') starIt = it;
     if (it.kind === 'cross') crossIt = it;
+    if (it.kind === 'frame') frameIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3028,6 +3103,10 @@ function watchSteer(s, dt) {
   } else if (!s.crossReady && crossIt) {
     tx = crossIt.x - p.x;
     ty = crossIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.frameReady && frameIt) {
+    tx = frameIt.x - p.x;
+    ty = frameIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3213,6 +3292,7 @@ function update(s, dt) {
     updateWaves(s, dt);
     updateStars(s, dt);
     updateCrosses(s, dt);
+    updateFrames(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3239,6 +3319,7 @@ function update(s, dt) {
     updateWaves(s, dt);
     updateStars(s, dt);
     updateCrosses(s, dt);
+    updateFrames(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3357,6 +3438,7 @@ function update(s, dt) {
   updateWaves(s, dt);
   updateStars(s, dt);
   updateCrosses(s, dt);
+  updateFrames(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3585,6 +3667,13 @@ function update(s, dt) {
       toast(s, TOAST.crossGet, 1.1, COL.cross);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.cross, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'frame') {
+      s.frameReady = true;
+      toast(s, TOAST.frameGet, 1.1, COL.frame);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.frame, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -4350,6 +4439,20 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.cross, it.x, it.y - 16);
+    } else if (it.kind === 'frame') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.frame, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.frame;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = COL.gold;
+      ctx.lineWidth = 1.8;
+      ctx.strokeRect(it.x - 3.6, it.y - 3.6, 7.2, 7.2);
+      ctx.fillStyle = COL.frame;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.frame, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -4928,6 +5031,43 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('叉', p.x, p.y - 12);
+    }
+  }
+
+  if (s.frames && s.frames.length) {
+    for (let i = 0; i < s.frames.length; i++) {
+      const p = s.frames[i];
+      const maxT = FRAME_DT * 8;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.frame, 0.28);
+      ctx.strokeStyle = COL.frame;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.strokeRect(p.x - 4, p.y - 4, 8, 8);
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.frame;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.frame;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('框', p.x, p.y - 12);
     }
   }
 
@@ -5798,6 +5938,27 @@ function draw(s, ctx) {
     ctx.lineTo(cx + 2.6, cy);
     ctx.stroke();
   }
+  if (s.frameReady) {
+    let fx;
+    let fy;
+    if (reducedMotion()) {
+      fx = p.x + 4;
+      fy = p.y + 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15;
+      fx = p.x + Math.cos(a) * 16;
+      fy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, fx, fy, 8, COL.frame, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.frame;
+    ctx.arc(fx, fy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = COL.gold;
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(fx - 2.4, fy - 2.4, 4.8, 4.8);
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -6212,6 +6373,20 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (rainEl && s.crossReady && !s.rainReady) {
     rainEl.textContent = NAMES.cross;
   }
+  const frameEl = (typeof document !== 'undefined') ? document.getElementById('frame') : null;
+  if (frameEl) {
+    frameEl.textContent = s.frameReady ? NAMES.frame : '';
+  } else if (crossEl && s.frameReady && !s.crossReady) {
+    crossEl.textContent = NAMES.frame;
+  } else if (starEl && s.frameReady && !s.starReady) {
+    starEl.textContent = NAMES.frame;
+  } else if (waveEl && s.frameReady && !s.waveReady) {
+    waveEl.textContent = NAMES.frame;
+  } else if (springEl && s.frameReady && !s.springReady) {
+    springEl.textContent = NAMES.frame;
+  } else if (rainEl && s.frameReady && !s.rainReady) {
+    rainEl.textContent = NAMES.frame;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -6358,10 +6533,12 @@ function selfCheck() {
   if (CROSS_D !== 150) throw new Error('CROSS_D 150');
   if (CROSS_GAP !== 30) throw new Error('CROSS_GAP 30');
   if (CROSS_DT !== 0.14) throw new Error('CROSS_DT 0.14');
+  if (FRAME_S !== 120) throw new Error('FRAME_S 120');
+  if (FRAME_DT !== 0.10) throw new Error('FRAME_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 45) throw new Error('need 45 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊'];
+  if (!ROOMS || ROOMS.length !== 46) throw new Error('need 46 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -6441,6 +6618,8 @@ function selfCheck() {
   if (ROOMS[43].name !== '星廊') throw new Error('room 44 星廊');
   if (ROOMS[44].id !== 'chalang') throw new Error('叉廊 id');
   if (ROOMS[44].name !== '叉廊') throw new Error('room 45 叉廊');
+  if (ROOMS[45].id !== 'kuanglang') throw new Error('框廊 id');
+  if (ROOMS[45].name !== '框廊') throw new Error('room 46 框廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -6481,6 +6660,9 @@ function selfCheck() {
   if (NAMES.cross !== '叉爆') throw new Error('NAMES.cross');
   if (COL.cross !== '#ff5ea8') throw new Error('COL.cross');
   if (lootKind('叉爆') !== 'cross' || lootKind('cross') !== 'cross') throw new Error('lootKind 叉爆');
+  if (NAMES.frame !== '框爆') throw new Error('NAMES.frame');
+  if (COL.frame !== '#7cffd4') throw new Error('COL.frame');
+  if (lootKind('框爆') !== 'frame' || lootKind('frame') !== 'frame') throw new Error('lootKind 框爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -6503,7 +6685,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -8040,6 +8222,7 @@ function selfCheck() {
   if (lootKind('波爆') !== 'wave' || lootKind('wave') !== 'wave') throw new Error('lootKind 波爆');
   if (lootKind('星爆') !== 'star' || lootKind('star') !== 'star') throw new Error('lootKind 星爆');
   if (lootKind('叉爆') !== 'cross' || lootKind('cross') !== 'cross') throw new Error('lootKind 叉爆');
+  if (lootKind('框爆') !== 'frame' || lootKind('frame') !== 'frame') throw new Error('lootKind 框爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -13491,6 +13674,7 @@ function selfCheck() {
   bothP.waveReady = true;
   bothP.starReady = true;
   bothP.crossReady = true;
+  bothP.frameReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -13503,6 +13687,7 @@ function selfCheck() {
   if (bothP.waveReady) throw new Error('same boom spends 波爆');
   if (bothP.starReady) throw new Error('same boom spends 星爆');
   if (bothP.crossReady) throw new Error('same boom spends 叉爆');
+  if (bothP.frameReady) throw new Error('same boom spends 框爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -13511,6 +13696,7 @@ function selfCheck() {
   if (!bothP.waves || bothP.waves.length !== WAVE_N * 2) throw new Error('same boom waves');
   if (!bothP.stars || bothP.stars.length !== STAR_N * 4) throw new Error('same boom stars');
   if (!bothP.crosses || bothP.crosses.length !== CROSS_N * 4) throw new Error('same boom crosses');
+  if (!bothP.frames || bothP.frames.length !== 8) throw new Error('same boom frames');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -14411,6 +14597,12 @@ function selfCheck() {
   bo.hitstop = 0;
   updateCrosses(bo, CROSS_DT * CROSS_N + 0.05);
   if (bo.waveReady !== true) throw new Error('波廊 cross-fork does not consume');
+  bo.frameReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updateFrames(bo, FRAME_DT * 8 + 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 frame-fork does not consume');
   bo.waters = [];
   explode(bo, boBox.x + boBox.w * 0.5, boBox.y - 20, false);
   if (!boBox.open) throw new Error('波廊 dry trail should open 心核');
@@ -14719,6 +14911,12 @@ function selfCheck() {
   xing.hitstop = 0;
   updateCrosses(xing, CROSS_DT * CROSS_N + 0.05);
   if (xing.starReady !== true) throw new Error('星廊 cross-fork does not consume');
+  xing.frameReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updateFrames(xing, FRAME_DT * 8 + 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 frame-fork does not consume');
   xing.waters = [];
   explode(xing, xingBox.x + xingBox.w * 0.5, xingBox.y - 20, false);
   if (!xingBox.open) throw new Error('星廊 dry trail should open 心核');
@@ -15037,11 +15235,20 @@ function selfCheck() {
   cha.hitstop = 0;
   updateSpins(cha, SPIN_DT * SPIN_N + 0.05);
   if (cha.crossReady !== true) throw new Error('叉廊 spin-orbit does not consume');
+  cha.frameReady = true;
+  explode(cha, 200, 200, false);
+  cha.crossReady = true;
+  cha.hitstop = 0;
+  updateFrames(cha, FRAME_DT * 8 + 0.05);
+  if (cha.crossReady !== true) throw new Error('叉廊 frame-seat does not consume');
   cha.waters = [];
   explode(cha, chaBox.x + chaBox.w * 0.5, chaBox.y - 20, false);
   if (!chaBox.open) throw new Error('叉廊 dry trail should open 心核');
   takeCore(cha, { x: 100, y: 100 });
-  if (!cha.won || cha.toast !== TOAST.all) throw new Error('叉廊 should 通关');
+  if (cha.won) throw new Error('叉廊 should not 通关');
+  if (cha.toast !== TOAST.core) throw new Error('叉廊 过关');
+  for (let i = 0; i < 20; i++) update(cha, 0.1);
+  if (cha.roomName !== '框廊') throw new Error('core advances to 框廊');
   const hudCha = makeState();
   resetRoom(hudCha, 44, false);
   if (roomHudText(hudCha).indexOf('叉廊 · 45/') !== 0) throw new Error('HUD 叉廊 45/n');
@@ -15056,6 +15263,326 @@ function selfCheck() {
   if (TOAST.crossGet !== '捡到叉爆') throw new Error('捡到叉爆');
   if (TOAST.crossUse !== '十字散开了') throw new Error('十字散开了 toast');
   if (TOAST.crossRoom !== '十字清场') throw new Error('十字清场');
+
+  const kua = makeState();
+  resetRoom(kua, 45, false);
+  if (kua.roomName !== '框廊' || kua.roomId !== 'kuanglang') throw new Error('kuanglang load');
+  if (kua.toast !== TOAST.frameRoom) throw new Error('框廊 intro');
+  if (kua.roomW !== 960 || kua.roomH !== 400) throw new Error('框廊 size');
+  if (kua.player.x !== 80 || kua.player.y !== 80) throw new Error('框廊 spawn');
+  if (kua.frameReady) throw new Error('框廊 frame starts false');
+  if (!kua.frames || kua.frames.length) throw new Error('框廊 frames start empty');
+  let kuaStill = 0;
+  let kuaTide = 0;
+  for (let i = 0; i < kua.waters.length; i++) {
+    if (kua.waters[i].tide) kuaTide += 1;
+    else kuaStill += 1;
+  }
+  if (kuaStill < 1) throw new Error('框廊 needs static 水洼');
+  if (kuaTide) throw new Error('框廊 no tide');
+  let kuaCore = 0;
+  let kuaHeal = 0;
+  let kuaThick = 0;
+  let kuaFrameItem = 0;
+  let kuaCrossItem = 0;
+  let kuaStarItem = 0;
+  let kuaWaveItem = 0;
+  let kuaSpringItem = 0;
+  let kuaRainItem = 0;
+  for (let i = 0; i < kua.crates.length; i++) {
+    if (kua.crates[i].loot === 'core') kuaCore += 1;
+    if (kua.crates[i].loot === 'heal') kuaHeal += 1;
+    if (kua.crates[i].thick) kuaThick += 1;
+  }
+  for (let i = 0; i < kua.items.length; i++) {
+    if (kua.items[i].kind === 'frame') kuaFrameItem += 1;
+    if (kua.items[i].kind === 'cross') kuaCrossItem += 1;
+    if (kua.items[i].kind === 'star') kuaStarItem += 1;
+    if (kua.items[i].kind === 'wave') kuaWaveItem += 1;
+    if (kua.items[i].kind === 'spring') kuaSpringItem += 1;
+    if (kua.items[i].kind === 'rain') kuaRainItem += 1;
+  }
+  if (kuaFrameItem < 1) throw new Error('框廊 needs 框爆');
+  if (kuaCrossItem || kuaStarItem || kuaWaveItem || kuaSpringItem || kuaRainItem) throw new Error('框廊 no extra pickup');
+  if (kuaCore !== 1) throw new Error('框廊 心核');
+  if (kuaHeal < 1) throw new Error('框廊 回星');
+  const kuaBox = kua.crates.find(function (c) { return c.loot === 'core'; });
+  if (!kuaBox || kuaBox.thick) throw new Error('框廊 心核 crate is not thick');
+  if (kuaThick) throw new Error('框廊 no thick crate');
+  let kuaHound = 0;
+  let kuaGuard = 0;
+  let kuaMoth = 0;
+  let kuaEater = 0;
+  let kuaShell = 0;
+  let kuaBoomer = 0;
+  for (let i = 0; i < kua.enemies.length; i++) {
+    if (isHound(kua.enemies[i])) kuaHound += 1;
+    else if (isMoth(kua.enemies[i])) kuaMoth += 1;
+    else if (isEater(kua.enemies[i])) kuaEater += 1;
+    else if (isShell(kua.enemies[i])) kuaShell += 1;
+    else if (isBoomer(kua.enemies[i])) kuaBoomer += 1;
+    else kuaGuard += 1;
+  }
+  if (kuaGuard !== 4 || kuaHound !== 0 || kuaMoth !== 0 || kuaEater !== 0 || kuaShell !== 0 || kuaBoomer !== 0) {
+    throw new Error('框廊 烬卫 only');
+  }
+  if (inWater(kua, 80, 80) || inOil(kua, 80, 80)) throw new Error('框廊 spawn dry');
+  if (inWater(kua, 200, 80) || inOil(kua, 200, 80)) throw new Error('框廊 框爆 dry');
+  if (inWater(kua, 400, 200) || inOil(kua, 400, 200)) throw new Error('框廊 plant dry');
+  if (inOil(kua, 860, 88) || inWater(kua, 860, 88)) throw new Error('框廊 core dry');
+  if (inWater(kua, 520, 80) || inOil(kua, 520, 80)) throw new Error('框廊 烬卫 dry NE');
+  if (inWater(kua, 520, 320) || inOil(kua, 520, 320)) throw new Error('框廊 烬卫 dry SE');
+  if (inWater(kua, 280, 320) || inOil(kua, 280, 320)) throw new Error('框廊 烬卫 dry SW');
+  if (inWater(kua, 280, 80) || inOil(kua, 280, 80)) throw new Error('框廊 烬卫 dry NW');
+  if (!inWater(kua, 750, 365)) throw new Error('框廊 wet bag');
+  if (inWater(kua, 80, 80)) throw new Error('框廊 NW pocket wet');
+  for (let i = 0; i < kua.crates.length; i++) {
+    const c = kua.crates[i];
+    if (circleRect(kua.player.x, kua.player.y, kua.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('框廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 220; x += 10) {
+    for (let i = 0; i < kua.crates.length; i++) {
+      const c = kua.crates[i];
+      if (circleRect(x, 80, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('框廊 crate on dry walk');
+      }
+    }
+  }
+  for (let t = 0; t <= 10; t++) {
+    const x = 200 + (400 - 200) * t / 10;
+    const y = 80 + (200 - 80) * t / 10;
+    for (let i = 0; i < kua.crates.length; i++) {
+      const c = kua.crates[i];
+      if (circleRect(x, y, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('框廊 crate on plant path');
+      }
+    }
+  }
+  const kuaNE = kua.enemies.find(function (e) { return Math.abs(e.x - 520) < 1 && Math.abs(e.y - 80) < 1; });
+  const kuaSE = kua.enemies.find(function (e) { return Math.abs(e.x - 520) < 1 && Math.abs(e.y - 320) < 1; });
+  const kuaSW = kua.enemies.find(function (e) { return Math.abs(e.x - 280) < 1 && Math.abs(e.y - 320) < 1; });
+  const kuaNW = kua.enemies.find(function (e) { return Math.abs(e.x - 280) < 1 && Math.abs(e.y - 80) < 1; });
+  if (!kuaNE || !kuaSE || !kuaSW || !kuaNW) throw new Error('框廊 four 烬卫 seats');
+  const kuaSeats = [kuaNE, kuaSE, kuaSW, kuaNW];
+  for (let i = 0; i < kuaSeats.length; i++) {
+    const e = kuaSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('框廊 primary misses 烬卫');
+  }
+  const frameSeatPos = [
+    [400, 80], [520, 80], [520, 200], [520, 320], [400, 320], [280, 320], [280, 200], [280, 80],
+  ];
+  for (let i = 0; i < kuaSeats.length; i++) {
+    const e = kuaSeats[i];
+    let hit = false;
+    for (let k = 0; k < frameSeatPos.length; k++) {
+      if (dist(e.x, e.y, frameSeatPos[k][0], frameSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('框廊 hot frame reaches 烬卫');
+  }
+  const kuaGround = kua.items.find(function (it) { return it.kind === 'frame' && !it.taken; });
+  if (!kuaGround) throw new Error('框廊 ground 框爆 present');
+  const kuaPickupNW = dist(kuaGround.x, kuaGround.y, 280, 80);
+  const kuaPickupN = dist(kuaGround.x, kuaGround.y, 400, 80);
+  const kuaPickupW = dist(kuaGround.x, kuaGround.y, 280, 200);
+  if (Math.min(kuaPickupNW, kuaPickupN, kuaPickupW) <= HOT_BLAST_R + ENEMY_R) throw new Error('框廊 pickup too close to seat');
+  const kuaCoreCx = kuaBox.x + kuaBox.w * 0.5;
+  const kuaCoreCy = kuaBox.y + kuaBox.h * 0.5;
+  if (!(dist(kuaCoreCx, kuaCoreCy, 400, 200) > HOT_BLAST_R)) throw new Error('框廊 core outside plant blast');
+  if (!(dist(kuaCoreCx, kuaCoreCy, 520, 200) > HOT_BLAST_R)) throw new Error('框廊 core outside E mid');
+  kua.player.x = 80;
+  kua.player.y = 80;
+  kua.player.hearts = 3;
+  kua.player.inv = 2;
+  kua.hitstop = 0;
+  kua.embers.length = 0;
+  kua.player.x = kuaGround.x;
+  kua.player.y = kuaGround.y;
+  update(kua, 0.016);
+  if (kua.frameReady !== true) throw new Error('pick frame → frameReady');
+  if (kua.toast !== TOAST.frameGet) throw new Error('捡到框爆 room');
+  kua.player.x = 80;
+  kua.player.y = 80;
+  kua.player.inv = 2;
+  kua.hitstop = 0;
+  kua.embers.length = 0;
+  const kuaHpNE = kuaNE.hp;
+  const kuaHpSE = kuaSE.hp;
+  const kuaHpSW = kuaSW.hp;
+  const kuaHpNW = kuaNW.hp;
+  explode(kua, 400, 200, false);
+  if (kua.frameReady) throw new Error('框廊 frame spends');
+  if (kua.toast !== TOAST.frameUse) throw new Error('方框绘开了 room');
+  if (!kua.frames || kua.frames.length !== 8) throw new Error('框廊 frames queued');
+  if (Math.abs(kua.frames[0].x - 400) > 1e-6 || Math.abs(kua.frames[0].y - 80) > 1e-6) throw new Error('框廊 N mid');
+  if (Math.abs(kua.frames[1].x - 520) > 1e-6 || Math.abs(kua.frames[1].y - 80) > 1e-6) throw new Error('框廊 NE');
+  if (Math.abs(kua.frames[2].x - 520) > 1e-6 || Math.abs(kua.frames[2].y - 200) > 1e-6) throw new Error('框廊 E mid');
+  if (Math.abs(kua.frames[3].x - 520) > 1e-6 || Math.abs(kua.frames[3].y - 320) > 1e-6) throw new Error('框廊 SE');
+  if (Math.abs(kua.frames[4].x - 400) > 1e-6 || Math.abs(kua.frames[4].y - 320) > 1e-6) throw new Error('框廊 S mid');
+  if (Math.abs(kua.frames[5].x - 280) > 1e-6 || Math.abs(kua.frames[5].y - 320) > 1e-6) throw new Error('框廊 SW');
+  if (Math.abs(kua.frames[6].x - 280) > 1e-6 || Math.abs(kua.frames[6].y - 200) > 1e-6) throw new Error('框廊 W mid');
+  if (Math.abs(kua.frames[7].x - 280) > 1e-6 || Math.abs(kua.frames[7].y - 80) > 1e-6) throw new Error('框廊 NW');
+  if (Math.abs(kua.frames[0].t - FRAME_DT) > 1e-6) throw new Error('框廊 dt 1');
+  if (Math.abs(kua.frames[1].t - FRAME_DT * 2) > 1e-6) throw new Error('框廊 dt 2');
+  if (Math.abs(kua.frames[7].t - FRAME_DT * 8) > 1e-6) throw new Error('框廊 dt 8');
+  if (kuaNE.hp !== kuaHpNE || kuaSE.hp !== kuaHpSE || kuaSW.hp !== kuaHpSW || kuaNW.hp !== kuaHpNW) {
+    throw new Error('框廊 primary misses');
+  }
+  kua.hitstop = 0;
+  updateFrames(kua, FRAME_DT + 0.01);
+  if (kua.frames.length !== 7) throw new Error('框廊 first frame N mid');
+  if (kuaNE.hp !== kuaHpNE) throw new Error('框廊 N mid misses NE');
+  kuaNE.x = 520;
+  kuaNE.y = 80;
+  kua.hitstop = 0;
+  updateFrames(kua, FRAME_DT + 0.01);
+  if (kua.frames.length !== 6) throw new Error('框廊 second frame NE');
+  if (!(kuaNE.hp === kuaHpNE - 2 || kuaNE.hp <= 0)) throw new Error('框廊 frame dmg NE');
+  kuaNE.x = 520;
+  kuaNE.y = 80;
+  kuaSE.x = 520;
+  kuaSE.y = 320;
+  kuaSW.x = 280;
+  kuaSW.y = 320;
+  kuaNW.x = 280;
+  kuaNW.y = 80;
+  kua.hitstop = 0;
+  updateFrames(kua, FRAME_DT * 6 + 0.05);
+  if (kua.frames.length !== 0) throw new Error('框廊 frames finish');
+  if (kuaNE.hp > 0 || kuaSE.hp > 0 || kuaSW.hp > 0 || kuaNW.hp > 0) throw new Error('框廊 corner clusters kill');
+  kua.frameReady = true;
+  dropSpark(kua, 300, 80, false);
+  if (kua.frameReady !== true) throw new Error('dropSpark keeps 框爆');
+  kua.input.dash = true;
+  kua.player.dashT = 0;
+  kua.player.dashCd = 0;
+  kua.hitstop = 0;
+  update(kua, 0.016);
+  if (kua.frameReady !== true) throw new Error('dash does not consume 框爆');
+  const frameSelf = makeState();
+  resetRoom(frameSelf, 0, false);
+  frameSelf.frameReady = true;
+  frameSelf.player.x = 400;
+  frameSelf.player.y = 80;
+  frameSelf.player.inv = 0;
+  frameSelf.player.hearts = 3;
+  explode(frameSelf, 400, 200, false);
+  if (frameSelf.player.hearts !== 3) throw new Error('primary dry misses player for frame');
+  frameSelf.hitstop = 0;
+  updateFrames(frameSelf, FRAME_DT + 0.01);
+  if (frameSelf.player.hearts !== 2) throw new Error('own frame hurts player');
+  frameSelf.player.hearts = 3;
+  frameSelf.player.inv = 0;
+  frameSelf.player.dashT = DASH_TIME;
+  frameSelf.frames = [{ x: 400, y: 80, t: 0, ox: 400, oy: 200 }];
+  frameSelf.hitstop = 0;
+  updateFrames(frameSelf, 0.02);
+  if (frameSelf.player.hearts !== 3) throw new Error('dash i-frames skip frame');
+  kua.frameReady = true;
+  kua.sparks.length = 0;
+  if (kua.frames) kua.frames.length = 0;
+  kua.player.x = 80;
+  kua.player.y = 80;
+  kua.player.dashT = 0;
+  kua.player.dashCd = 0;
+  kua.player.vx = 0;
+  kua.player.vy = 0;
+  kua.player.inv = 2;
+  kua.input.x = 0;
+  kua.input.y = 0;
+  kua.input.dash = false;
+  kua.hitstop = 0;
+  kua.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(kua, 120, 120, false);
+  if (!kua.sparks[kua.sparks.length - 1].wet) throw new Error('框廊 wet spark');
+  const kuaBooms = kua.stats.booms;
+  for (let i = 0; i < 24; i++) update(kua, 0.1);
+  if (kua.frameReady !== true) throw new Error('框廊 wet fizzle does not consume');
+  if (kua.stats.booms !== kuaBooms) throw new Error('框廊 wet no extra boom');
+  kua.waters = [];
+  explode(kua, 200, 200, false, false, false, { fork: true });
+  if (kua.frameReady !== true) throw new Error('框廊 fork does not consume');
+  kua.echoReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  for (let i = 0; i < 12; i++) update(kua, 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 echo does not consume');
+  kua.fanReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateFans(kua, FAN_DT * FAN_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 fan-fork does not consume');
+  kua.drumReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateDrums(kua, 0.55);
+  if (kua.frameReady !== true) throw new Error('框廊 drum-wave does not consume');
+  kua.pulseReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updatePulses(kua, PULSE_DT * PULSE_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 pulse-aftershock does not consume');
+  kua.rainReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateRains(kua, RAIN_DT * RAIN_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 rain-drop does not consume');
+  kua.springReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateSprings(kua, SPRING_DT * SPRING_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 spring-jet does not consume');
+  kua.waveReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateWaves(kua, WAVE_DT * WAVE_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 wave-seat does not consume');
+  kua.starReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateStars(kua, STAR_DT * STAR_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 star-seat does not consume');
+  kua.crossReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateCrosses(kua, CROSS_DT * CROSS_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 cross-seat does not consume');
+  kua.spinReady = true;
+  explode(kua, 200, 200, false);
+  kua.frameReady = true;
+  kua.hitstop = 0;
+  updateSpins(kua, SPIN_DT * SPIN_N + 0.05);
+  if (kua.frameReady !== true) throw new Error('框廊 spin-orbit does not consume');
+  kua.waters = [];
+  explode(kua, kuaBox.x + kuaBox.w * 0.5, kuaBox.y - 20, false);
+  if (!kuaBox.open) throw new Error('框廊 dry trail should open 心核');
+  takeCore(kua, { x: 100, y: 100 });
+  if (!kua.won || kua.toast !== TOAST.all) throw new Error('框廊 should 通关');
+  const hudKua = makeState();
+  resetRoom(hudKua, 45, false);
+  if (roomHudText(hudKua).indexOf('框廊 · 46/') !== 0) throw new Error('HUD 框廊 46/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (FRAME_S !== 120) throw new Error('FRAME_S 120');
+  if (FRAME_DT !== 0.10) throw new Error('FRAME_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.frameGet !== '捡到框爆') throw new Error('捡到框爆');
+  if (TOAST.frameUse !== '方框绘开了') throw new Error('方框绘开了 toast');
+  if (TOAST.frameRoom !== '方框清场') throw new Error('方框清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
