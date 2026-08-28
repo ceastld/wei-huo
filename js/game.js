@@ -56,6 +56,10 @@ const WAVE_N = 3;
 const WAVE_W = 180;
 const WAVE_GAP = 30;
 const WAVE_DT = 0.14;
+const STAR_N = 3;
+const STAR_D = 150;
+const STAR_GAP = 30;
+const STAR_DT = 0.14;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -149,6 +153,7 @@ const NAMES = {
   rain: '雨爆',
   spring: '泉爆',
   wave: '波爆',
+  star: '星爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -274,6 +279,9 @@ const TOAST = {
   waveGet: '捡到波爆',
   waveUse: '浪拍过去了',
   waveRoom: '浪过去清场',
+  starGet: '捡到星爆',
+  starUse: '星芒散开了',
+  starRoom: '星芒清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -314,6 +322,7 @@ const COL = {
   rain: '#5ee0ff',
   spring: '#9dff6a',
   wave: '#ff8f5a',
+  star: '#ffd24a',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -572,6 +581,7 @@ function lootKind(drop) {
   if (drop === '雨爆' || drop === 'rain') return 'rain';
   if (drop === '泉爆' || drop === 'spring') return 'spring';
   if (drop === '波爆' || drop === 'wave') return 'wave';
+  if (drop === '星爆' || drop === 'star') return 'star';
   return null;
 }
 
@@ -647,6 +657,7 @@ function makeState() {
     rainReady: false,
     springReady: false,
     waveReady: false,
+    starReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -661,6 +672,7 @@ function makeState() {
     rains: [],
     springs: [],
     waves: [],
+    stars: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -786,6 +798,7 @@ function resetRoom(s, index, keepHearts) {
   s.rainReady = false;
   s.springReady = false;
   s.waveReady = false;
+  s.starReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -824,6 +837,8 @@ function resetRoom(s, index, keepHearts) {
   s.springs.length = 0;
   if (!s.waves) s.waves = [];
   s.waves.length = 0;
+  if (!s.stars) s.stars = [];
+  s.stars.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -946,6 +961,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '雨廊') toast(s, TOAST.rainRoom, 1.4, COL.rain);
   else if (room.name === '泉廊') toast(s, TOAST.springRoom, 1.4, COL.spring);
   else if (room.name === '波廊') toast(s, TOAST.waveRoom, 1.4, COL.wave);
+  else if (room.name === '星廊') toast(s, TOAST.starRoom, 1.4, COL.star);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1676,6 +1692,32 @@ function updateWaves(s, dt) {
   }
 }
 
+function updateStars(s, dt) {
+  if (!s.stars || !s.stars.length) return;
+  const fires = [];
+  for (let i = s.stars.length - 1; i >= 0; i--) {
+    const p = s.stars[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.stars.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.star, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.star, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -1868,6 +1910,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.waveReady) {
     s.waveReady = false;
     waving = true;
+  }
+  let starring = false;
+  if (!forked && s.starReady) {
+    s.starReady = false;
+    starring = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2444,6 +2491,24 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 160);
     }
   }
+  if (starring) {
+    if (!s.stars) s.stars = [];
+    for (let k = 0; k < STAR_N; k++) {
+      const d = STAR_D - STAR_GAP * k;
+      const o = d * Math.SQRT1_2;
+      s.stars.push({ x: x + o, y: y - o, t: STAR_DT * (k + 1), ox: x, oy: y });
+      s.stars.push({ x: x - o, y: y - o, t: STAR_DT * (k + 1), ox: x, oy: y });
+      s.stars.push({ x: x + o, y: y + o, t: STAR_DT * (k + 1), ox: x, oy: y });
+      s.stars.push({ x: x - o, y: y + o, t: STAR_DT * (k + 1), ox: x, oy: y });
+    }
+    toast(s, TOAST.starUse, 1.1, COL.star);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.star, 170);
+      burst(s, x, y, 4, COL.wave, 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2719,6 +2784,7 @@ function watchSteer(s, dt) {
   let rainIt = null;
   let springIt = null;
   let waveIt = null;
+  let starIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2748,8 +2814,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'rain') rainIt = it;
     if (it.kind === 'spring') springIt = it;
     if (it.kind === 'wave') waveIt = it;
+    if (it.kind === 'star') starIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt);
 
   let guard = null;
   let gd = 1e9;
@@ -2887,6 +2954,10 @@ function watchSteer(s, dt) {
   } else if (!s.waveReady && waveIt) {
     tx = waveIt.x - p.x;
     ty = waveIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.starReady && starIt) {
+    tx = starIt.x - p.x;
+    ty = starIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3070,6 +3141,7 @@ function update(s, dt) {
     updateRains(s, dt);
     updateSprings(s, dt);
     updateWaves(s, dt);
+    updateStars(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3094,6 +3166,7 @@ function update(s, dt) {
     updateRains(s, dt);
     updateSprings(s, dt);
     updateWaves(s, dt);
+    updateStars(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3210,6 +3283,7 @@ function update(s, dt) {
   updateRains(s, dt);
   updateSprings(s, dt);
   updateWaves(s, dt);
+  updateStars(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3425,6 +3499,13 @@ function update(s, dt) {
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.wave, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'star') {
+      s.starReady = true;
+      toast(s, TOAST.starGet, 1.1, COL.star);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.star, 130);
+      burst(s, it.x, it.y, 4, COL.wave, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
       p.hearts = Math.min(HEART_MAX, p.hearts + 1);
@@ -4151,6 +4232,25 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.wave, it.x, it.y - 16);
+    } else if (it.kind === 'star') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.star, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.wave, 0.35);
+      ctx.fillStyle = COL.star;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = COL.wave;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(it.x - 4, it.y - 4);
+      ctx.lineTo(it.x + 4, it.y + 4);
+      ctx.moveTo(it.x + 4, it.y - 4);
+      ctx.lineTo(it.x - 4, it.y + 4);
+      ctx.stroke();
+      ctx.fillStyle = COL.star;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.star, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -4647,6 +4747,47 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('波', p.x, p.y - 12);
+    }
+  }
+
+  if (s.stars && s.stars.length) {
+    for (let i = 0; i < s.stars.length; i++) {
+      const p = s.stars[i];
+      const maxT = STAR_DT * STAR_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.star, 0.28);
+      ctx.strokeStyle = COL.star;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x - 4, p.y - 4);
+      ctx.lineTo(p.x + 4, p.y + 4);
+      ctx.moveTo(p.x + 4, p.y - 4);
+      ctx.lineTo(p.x - 4, p.y + 4);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.star;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.star;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('星', p.x, p.y - 12);
     }
   }
 
@@ -5467,6 +5608,31 @@ function draw(s, ctx) {
     ctx.arc(wx, wy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.starReady) {
+    let sx;
+    let sy;
+    if (reducedMotion()) {
+      sx = p.x - 4;
+      sy = p.y - 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65;
+      sx = p.x + Math.cos(a) * 16;
+      sy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, sx, sy, 8, COL.star, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.star;
+    ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = COL.wave;
+    ctx.lineWidth = 1.2;
+    ctx.moveTo(sx - 2.4, sy - 2.4);
+    ctx.lineTo(sx + 2.4, sy + 2.4);
+    ctx.moveTo(sx + 2.4, sy - 2.4);
+    ctx.lineTo(sx - 2.4, sy + 2.4);
+    ctx.stroke();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -5857,6 +6023,18 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (drumEl && s.waveReady && !s.drumReady) {
     drumEl.textContent = NAMES.wave;
   }
+  const starEl = (typeof document !== 'undefined') ? document.getElementById('star') : null;
+  if (starEl) {
+    starEl.textContent = s.starReady ? NAMES.star : '';
+  } else if (waveEl && s.starReady && !s.waveReady) {
+    waveEl.textContent = NAMES.star;
+  } else if (springEl && s.starReady && !s.springReady) {
+    springEl.textContent = NAMES.star;
+  } else if (rainEl && s.starReady && !s.rainReady) {
+    rainEl.textContent = NAMES.star;
+  } else if (pulseEl && s.starReady && !s.pulseReady) {
+    pulseEl.textContent = NAMES.star;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -5995,10 +6173,14 @@ function selfCheck() {
   if (WAVE_W !== 180) throw new Error('WAVE_W 180');
   if (WAVE_GAP !== 30) throw new Error('WAVE_GAP 30');
   if (WAVE_DT !== 0.14) throw new Error('WAVE_DT 0.14');
+  if (STAR_N !== 3) throw new Error('STAR_N 3');
+  if (STAR_D !== 150) throw new Error('STAR_D 150');
+  if (STAR_GAP !== 30) throw new Error('STAR_GAP 30');
+  if (STAR_DT !== 0.14) throw new Error('STAR_DT 0.14');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 43) throw new Error('need 43 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊'];
+  if (!ROOMS || ROOMS.length !== 44) throw new Error('need 44 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -6074,6 +6256,8 @@ function selfCheck() {
   if (ROOMS[41].name !== '泉廊') throw new Error('room 42 泉廊');
   if (ROOMS[42].id !== 'bolang') throw new Error('波廊 id');
   if (ROOMS[42].name !== '波廊') throw new Error('room 43 波廊');
+  if (ROOMS[43].id !== 'xinglang') throw new Error('星廊 id');
+  if (ROOMS[43].name !== '星廊') throw new Error('room 44 星廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -6108,6 +6292,9 @@ function selfCheck() {
   if (NAMES.wave !== '波爆') throw new Error('NAMES.wave');
   if (COL.wave !== '#ff8f5a') throw new Error('COL.wave');
   if (lootKind('波爆') !== 'wave' || lootKind('wave') !== 'wave') throw new Error('lootKind 波爆');
+  if (NAMES.star !== '星爆') throw new Error('NAMES.star');
+  if (COL.star !== '#ffd24a') throw new Error('COL.star');
+  if (lootKind('星爆') !== 'star' || lootKind('star') !== 'star') throw new Error('lootKind 星爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -6130,7 +6317,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -7665,6 +7852,7 @@ function selfCheck() {
   if (lootKind('雨爆') !== 'rain' || lootKind('rain') !== 'rain') throw new Error('lootKind 雨爆');
   if (lootKind('泉爆') !== 'spring' || lootKind('spring') !== 'spring') throw new Error('lootKind 泉爆');
   if (lootKind('波爆') !== 'wave' || lootKind('wave') !== 'wave') throw new Error('lootKind 波爆');
+  if (lootKind('星爆') !== 'star' || lootKind('star') !== 'star') throw new Error('lootKind 星爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -13114,6 +13302,7 @@ function selfCheck() {
   bothP.rainReady = true;
   bothP.springReady = true;
   bothP.waveReady = true;
+  bothP.starReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -13124,12 +13313,14 @@ function selfCheck() {
   if (bothP.rainReady) throw new Error('same boom spends 雨爆');
   if (bothP.springReady) throw new Error('same boom spends 泉爆');
   if (bothP.waveReady) throw new Error('same boom spends 波爆');
+  if (bothP.starReady) throw new Error('same boom spends 星爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
   if (!bothP.rains || bothP.rains.length !== RAIN_N) throw new Error('same boom rains');
   if (!bothP.springs || bothP.springs.length !== SPRING_N) throw new Error('same boom springs');
   if (!bothP.waves || bothP.waves.length !== WAVE_N * 2) throw new Error('same boom waves');
+  if (!bothP.stars || bothP.stars.length !== STAR_N * 4) throw new Error('same boom stars');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -13732,6 +13923,12 @@ function selfCheck() {
   quan.hitstop = 0;
   updateWaves(quan, WAVE_DT * WAVE_N + 0.05);
   if (quan.springReady !== true) throw new Error('泉廊 wave-fork does not consume');
+  quan.starReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  quan.hitstop = 0;
+  updateStars(quan, STAR_DT * STAR_N + 0.05);
+  if (quan.springReady !== true) throw new Error('泉廊 star-fork does not consume');
   quan.waters = [];
   explode(quan, quanBox.x + quanBox.w * 0.5, quanBox.y - 20, false);
   if (!quanBox.open) throw new Error('泉廊 dry trail should open 心核');
@@ -14012,11 +14209,20 @@ function selfCheck() {
   bo.hitstop = 0;
   updateSpins(bo, SPIN_DT * SPIN_N + 0.05);
   if (bo.waveReady !== true) throw new Error('波廊 spin-orbit does not consume');
+  bo.starReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updateStars(bo, STAR_DT * STAR_N + 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 star-fork does not consume');
   bo.waters = [];
   explode(bo, boBox.x + boBox.w * 0.5, boBox.y - 20, false);
   if (!boBox.open) throw new Error('波廊 dry trail should open 心核');
   takeCore(bo, { x: 100, y: 100 });
-  if (!bo.won || bo.toast !== TOAST.all) throw new Error('波廊 should 通关');
+  if (bo.won) throw new Error('波廊 should not 通关');
+  if (bo.toast !== TOAST.core) throw new Error('波廊 过关');
+  for (let i = 0; i < 20; i++) update(bo, 0.1);
+  if (bo.roomName !== '星廊') throw new Error('core advances to 星廊');
   const hudBo = makeState();
   resetRoom(hudBo, 42, false);
   if (roomHudText(hudBo).indexOf('波廊 · 43/') !== 0) throw new Error('HUD 波廊 43/n');
@@ -14031,6 +14237,303 @@ function selfCheck() {
   if (TOAST.waveGet !== '捡到波爆') throw new Error('捡到波爆');
   if (TOAST.waveUse !== '浪拍过去了') throw new Error('浪拍过去了 toast');
   if (TOAST.waveRoom !== '浪过去清场') throw new Error('浪过去清场');
+
+  const xing = makeState();
+  resetRoom(xing, 43, false);
+  if (xing.roomName !== '星廊' || xing.roomId !== 'xinglang') throw new Error('xinglang load');
+  if (xing.toast !== TOAST.starRoom) throw new Error('星廊 intro');
+  if (xing.roomW !== 960 || xing.roomH !== 400) throw new Error('星廊 size');
+  if (xing.player.x !== 80 || xing.player.y !== 200) throw new Error('星廊 spawn');
+  if (xing.starReady) throw new Error('星廊 star starts false');
+  if (!xing.stars || xing.stars.length) throw new Error('星廊 stars start empty');
+  let xingStill = 0;
+  let xingTide = 0;
+  for (let i = 0; i < xing.waters.length; i++) {
+    if (xing.waters[i].tide) xingTide += 1;
+    else xingStill += 1;
+  }
+  if (xingStill < 1) throw new Error('星廊 needs static 水洼');
+  if (xingTide) throw new Error('星廊 no tide');
+  let xingCore = 0;
+  let xingHeal = 0;
+  let xingThick = 0;
+  let xingStarItem = 0;
+  let xingWaveItem = 0;
+  let xingSpringItem = 0;
+  let xingRainItem = 0;
+  let xingPulseItem = 0;
+  for (let i = 0; i < xing.crates.length; i++) {
+    if (xing.crates[i].loot === 'core') xingCore += 1;
+    if (xing.crates[i].loot === 'heal') xingHeal += 1;
+    if (xing.crates[i].thick) xingThick += 1;
+  }
+  for (let i = 0; i < xing.items.length; i++) {
+    if (xing.items[i].kind === 'star') xingStarItem += 1;
+    if (xing.items[i].kind === 'wave') xingWaveItem += 1;
+    if (xing.items[i].kind === 'spring') xingSpringItem += 1;
+    if (xing.items[i].kind === 'rain') xingRainItem += 1;
+    if (xing.items[i].kind === 'pulse') xingPulseItem += 1;
+  }
+  if (xingStarItem < 1) throw new Error('星廊 needs 星爆');
+  if (xingWaveItem || xingSpringItem || xingRainItem || xingPulseItem) throw new Error('星廊 no extra pickup');
+  if (xingCore !== 1) throw new Error('星廊 心核');
+  if (xingHeal < 1) throw new Error('星廊 回星');
+  const xingBox = xing.crates.find(function (c) { return c.loot === 'core'; });
+  if (!xingBox || xingBox.thick) throw new Error('星廊 心核 crate is not thick');
+  if (xingThick) throw new Error('星廊 no thick crate');
+  let xingHound = 0;
+  let xingGuard = 0;
+  let xingMoth = 0;
+  let xingEater = 0;
+  let xingShell = 0;
+  let xingBoomer = 0;
+  for (let i = 0; i < xing.enemies.length; i++) {
+    if (isHound(xing.enemies[i])) xingHound += 1;
+    else if (isMoth(xing.enemies[i])) xingMoth += 1;
+    else if (isEater(xing.enemies[i])) xingEater += 1;
+    else if (isShell(xing.enemies[i])) xingShell += 1;
+    else if (isBoomer(xing.enemies[i])) xingBoomer += 1;
+    else xingGuard += 1;
+  }
+  if (xingGuard !== 4 || xingHound !== 0 || xingMoth !== 0 || xingEater !== 0 || xingShell !== 0 || xingBoomer !== 0) {
+    throw new Error('星廊 烬卫 only');
+  }
+  if (inWater(xing, 80, 200) || inOil(xing, 80, 200)) throw new Error('星廊 spawn dry');
+  if (inWater(xing, 240, 200) || inOil(xing, 240, 200)) throw new Error('星廊 星爆 dry');
+  if (inWater(xing, 400, 200) || inOil(xing, 400, 200)) throw new Error('星廊 plant dry');
+  if (inOil(xing, 860, 88) || inWater(xing, 860, 88)) throw new Error('星廊 core dry');
+  if (inWater(xing, 506, 94) || inOil(xing, 506, 94)) throw new Error('星廊 烬卫 dry NE');
+  if (inWater(xing, 294, 94) || inOil(xing, 294, 94)) throw new Error('星廊 烬卫 dry NW');
+  if (inWater(xing, 506, 306) || inOil(xing, 506, 306)) throw new Error('星廊 烬卫 dry SE');
+  if (inWater(xing, 294, 306) || inOil(xing, 294, 306)) throw new Error('星廊 烬卫 dry SW');
+  if (!inWater(xing, 750, 365)) throw new Error('星廊 wet bag');
+  if (inWater(xing, 400, 50)) throw new Error('星廊 north shelf wet');
+  for (let i = 0; i < xing.crates.length; i++) {
+    const c = xing.crates[i];
+    if (circleRect(xing.player.x, xing.player.y, xing.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('星廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 450; x += 10) {
+    for (let i = 0; i < xing.crates.length; i++) {
+      const c = xing.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('星廊 crate on dry walk');
+      }
+    }
+  }
+  const xingNE = xing.enemies.find(function (e) { return Math.abs(e.x - 506) < 1 && Math.abs(e.y - 94) < 1; });
+  const xingNW = xing.enemies.find(function (e) { return Math.abs(e.x - 294) < 1 && Math.abs(e.y - 94) < 1; });
+  const xingSE = xing.enemies.find(function (e) { return Math.abs(e.x - 506) < 1 && Math.abs(e.y - 306) < 1; });
+  const xingSW = xing.enemies.find(function (e) { return Math.abs(e.x - 294) < 1 && Math.abs(e.y - 306) < 1; });
+  if (!xingNE || !xingNW || !xingSE || !xingSW) throw new Error('星廊 four 烬卫 seats');
+  const xingSeats = [xingNE, xingNW, xingSE, xingSW];
+  for (let i = 0; i < xingSeats.length; i++) {
+    const e = xingSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('星廊 primary misses 烬卫');
+  }
+  for (let i = 0; i < xingSeats.length; i++) {
+    for (let k = 0; k < STAR_N; k++) {
+      const d = STAR_D - STAR_GAP * k;
+      const o = d * Math.SQRT1_2;
+      const sx = xingSeats[i].x > 400 ? 400 + o : 400 - o;
+      const sy = xingSeats[i].y < 200 ? 200 - o : 200 + o;
+      if (dist(xingSeats[i].x, xingSeats[i].y, sx, sy) > HOT_BLAST_R + (xingSeats[i].r || ENEMY_R)) {
+        throw new Error('星廊 hot star reaches 烬卫');
+      }
+    }
+  }
+  const xingCoreCx = xingBox.x + xingBox.w * 0.5;
+  const xingCoreCy = xingBox.y + xingBox.h * 0.5;
+  if (!(dist(xingCoreCx, xingCoreCy, 400, 200) > HOT_BLAST_R)) throw new Error('星廊 core outside plant blast');
+  xing.player.x = 80;
+  xing.player.y = 80;
+  xing.player.hearts = 3;
+  xing.player.inv = 2;
+  xing.hitstop = 0;
+  xing.embers.length = 0;
+  const xingGround = xing.items.find(function (it) { return it.kind === 'star' && !it.taken; });
+  if (!xingGround) throw new Error('星廊 ground 星爆 present');
+  xing.player.x = xingGround.x;
+  xing.player.y = 200;
+  update(xing, 0.016);
+  if (xing.starReady !== true) throw new Error('pick star → starReady');
+  if (xing.toast !== TOAST.starGet) throw new Error('捡到星爆 room');
+  xing.player.x = 80;
+  xing.player.y = 80;
+  xing.player.inv = 2;
+  xing.hitstop = 0;
+  xing.embers.length = 0;
+  const xingHpNE = xingNE.hp;
+  const xingHpNW = xingNW.hp;
+  const xingHpSE = xingSE.hp;
+  const xingHpSW = xingSW.hp;
+  explode(xing, 400, 200, false);
+  if (xing.starReady) throw new Error('星廊 star spends');
+  if (xing.toast !== TOAST.starUse) throw new Error('星芒散开了 room');
+  if (!xing.stars || xing.stars.length !== STAR_N * 4) throw new Error('星廊 stars queued');
+  const o0 = STAR_D * Math.SQRT1_2;
+  const o1 = (STAR_D - STAR_GAP) * Math.SQRT1_2;
+  const o2 = (STAR_D - STAR_GAP * 2) * Math.SQRT1_2;
+  if (Math.abs(xing.stars[0].x - (400 + o0)) > 1e-6 || Math.abs(xing.stars[0].y - (200 - o0)) > 1e-6) throw new Error('星廊 star far NE');
+  if (Math.abs(xing.stars[1].x - (400 - o0)) > 1e-6 || Math.abs(xing.stars[1].y - (200 - o0)) > 1e-6) throw new Error('星廊 star far NW');
+  if (Math.abs(xing.stars[2].x - (400 + o0)) > 1e-6 || Math.abs(xing.stars[2].y - (200 + o0)) > 1e-6) throw new Error('星廊 star far SE');
+  if (Math.abs(xing.stars[3].x - (400 - o0)) > 1e-6 || Math.abs(xing.stars[3].y - (200 + o0)) > 1e-6) throw new Error('星廊 star far SW');
+  if (Math.abs(xing.stars[4].x - (400 + o1)) > 1e-6 || Math.abs(xing.stars[4].y - (200 - o1)) > 1e-6) throw new Error('星廊 star mid NE');
+  if (Math.abs(xing.stars[8].x - (400 + o2)) > 1e-6 || Math.abs(xing.stars[8].y - (200 - o2)) > 1e-6) throw new Error('星廊 star near NE');
+  if (Math.abs(xing.stars[0].t - STAR_DT) > 1e-6) throw new Error('星廊 dt 1');
+  if (Math.abs(xing.stars[4].t - STAR_DT * 2) > 1e-6) throw new Error('星廊 dt 2');
+  if (Math.abs(xing.stars[8].t - STAR_DT * 3) > 1e-6) throw new Error('星廊 dt 3');
+  if (xingNE.hp !== xingHpNE || xingNW.hp !== xingHpNW || xingSE.hp !== xingHpSE || xingSW.hp !== xingHpSW) throw new Error('星廊 primary misses');
+  xing.hitstop = 0;
+  updateStars(xing, STAR_DT + 0.01);
+  if (xing.stars.length !== 8) throw new Error('星廊 first star');
+  if (!(xingNE.hp === xingHpNE - 2 || xingNE.hp <= 0)) throw new Error('星廊 star dmg NE');
+  if (!(xingNW.hp === xingHpNW - 2 || xingNW.hp <= 0)) throw new Error('星廊 star dmg NW');
+  if (!(xingSE.hp === xingHpSE - 2 || xingSE.hp <= 0)) throw new Error('星廊 star dmg SE');
+  if (!(xingSW.hp === xingHpSW - 2 || xingSW.hp <= 0)) throw new Error('星廊 star dmg SW');
+  xingNE.x = 506;
+  xingNE.y = 94;
+  xingNW.x = 294;
+  xingNW.y = 94;
+  xingSE.x = 506;
+  xingSE.y = 306;
+  xingSW.x = 294;
+  xingSW.y = 306;
+  xing.hitstop = 0;
+  updateStars(xing, STAR_DT + 0.01);
+  if (xing.stars.length !== 4) throw new Error('星廊 second star');
+  xingNE.x = 506;
+  xingNE.y = 94;
+  xingNW.x = 294;
+  xingNW.y = 94;
+  xingSE.x = 506;
+  xingSE.y = 306;
+  xingSW.x = 294;
+  xingSW.y = 306;
+  xing.hitstop = 0;
+  updateStars(xing, STAR_DT + 0.01);
+  if (xing.stars.length !== 0) throw new Error('星廊 stars finish');
+  if (xingNE.hp > 0 || xingNW.hp > 0 || xingSE.hp > 0 || xingSW.hp > 0) throw new Error('星廊 three stars kill');
+  xing.starReady = true;
+  dropSpark(xing, 300, 80, false);
+  if (xing.starReady !== true) throw new Error('dropSpark keeps 星爆');
+  xing.input.dash = true;
+  xing.player.dashT = 0;
+  xing.player.dashCd = 0;
+  xing.hitstop = 0;
+  update(xing, 0.016);
+  if (xing.starReady !== true) throw new Error('dash does not consume 星爆');
+  const starSelf = makeState();
+  resetRoom(starSelf, 0, false);
+  starSelf.starReady = true;
+  starSelf.player.x = 400 + STAR_D * Math.SQRT1_2;
+  starSelf.player.y = 200 - STAR_D * Math.SQRT1_2;
+  starSelf.player.inv = 0;
+  starSelf.player.hearts = 3;
+  explode(starSelf, 400, 200, false);
+  if (starSelf.player.hearts !== 3) throw new Error('primary dry misses player for star');
+  starSelf.hitstop = 0;
+  updateStars(starSelf, STAR_DT + 0.01);
+  if (starSelf.player.hearts !== 2) throw new Error('own star hurts player');
+  starSelf.player.hearts = 3;
+  starSelf.player.inv = 0;
+  starSelf.player.dashT = DASH_TIME;
+  starSelf.stars = [{ x: 400 + STAR_D * Math.SQRT1_2, y: 200 - STAR_D * Math.SQRT1_2, t: 0 }];
+  starSelf.hitstop = 0;
+  updateStars(starSelf, 0.02);
+  if (starSelf.player.hearts !== 3) throw new Error('dash i-frames skip star');
+  xing.starReady = true;
+  xing.sparks.length = 0;
+  if (xing.stars) xing.stars.length = 0;
+  xing.player.x = 80;
+  xing.player.y = 80;
+  xing.player.dashT = 0;
+  xing.player.dashCd = 0;
+  xing.player.vx = 0;
+  xing.player.vy = 0;
+  xing.player.inv = 2;
+  xing.input.x = 0;
+  xing.input.y = 0;
+  xing.input.dash = false;
+  xing.hitstop = 0;
+  xing.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(xing, 120, 120, false);
+  if (!xing.sparks[xing.sparks.length - 1].wet) throw new Error('星廊 wet spark');
+  const xingBooms = xing.stats.booms;
+  for (let i = 0; i < 24; i++) update(xing, 0.1);
+  if (xing.starReady !== true) throw new Error('星廊 wet fizzle does not consume');
+  if (xing.stats.booms !== xingBooms) throw new Error('星廊 wet no extra boom');
+  xing.waters = [];
+  explode(xing, 200, 200, false, false, false, { fork: true });
+  if (xing.starReady !== true) throw new Error('星廊 fork does not consume');
+  xing.echoReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  for (let i = 0; i < 12; i++) update(xing, 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 echo does not consume');
+  xing.fanReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updateFans(xing, FAN_DT * FAN_N + 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 fan-fork does not consume');
+  xing.drumReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updateDrums(xing, 0.55);
+  if (xing.starReady !== true) throw new Error('星廊 drum-wave does not consume');
+  xing.pulseReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updatePulses(xing, PULSE_DT * PULSE_N + 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 pulse-aftershock does not consume');
+  xing.rainReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updateRains(xing, RAIN_DT * RAIN_N + 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 rain-drop does not consume');
+  xing.springReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updateSprings(xing, SPRING_DT * SPRING_N + 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 spring-jet does not consume');
+  xing.waveReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updateWaves(xing, WAVE_DT * WAVE_N + 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 wave-seat does not consume');
+  xing.spinReady = true;
+  explode(xing, 200, 200, false);
+  xing.starReady = true;
+  xing.hitstop = 0;
+  updateSpins(xing, SPIN_DT * SPIN_N + 0.05);
+  if (xing.starReady !== true) throw new Error('星廊 spin-orbit does not consume');
+  xing.waters = [];
+  explode(xing, xingBox.x + xingBox.w * 0.5, xingBox.y - 20, false);
+  if (!xingBox.open) throw new Error('星廊 dry trail should open 心核');
+  takeCore(xing, { x: 100, y: 100 });
+  if (!xing.won || xing.toast !== TOAST.all) throw new Error('星廊 should 通关');
+  const hudXing = makeState();
+  resetRoom(hudXing, 43, false);
+  if (roomHudText(hudXing).indexOf('星廊 · 44/') !== 0) throw new Error('HUD 星廊 44/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (STAR_N !== 3) throw new Error('STAR_N 3');
+  if (STAR_D !== 150) throw new Error('STAR_D 150');
+  if (STAR_GAP !== 30) throw new Error('STAR_GAP 30');
+  if (STAR_DT !== 0.14) throw new Error('STAR_DT 0.14');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.starGet !== '捡到星爆') throw new Error('捡到星爆');
+  if (TOAST.starUse !== '星芒散开了') throw new Error('星芒散开了 toast');
+  if (TOAST.starRoom !== '星芒清场') throw new Error('星芒清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
