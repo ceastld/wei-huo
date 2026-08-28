@@ -190,3 +190,14 @@ html, body {
   letter-spacing: 0.16em;
   color: var(--gold);
 }
+
+#combo {
+  display: block;
+  margin-top: 4px;
+  min-height: 1em;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(255, 210, 74, 0.45);
+}

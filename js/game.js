@@ -5,6 +5,7 @@ const SPARK_GAP = 18;
 const BLAST_R = 36;
 const HOT_BLAST_R = 56;
 const CHAIN_T = 0.12;
+const COMBO_MIN = 3;
 const EMBER_T = 0.55;
 const VIEW_W = 960;
 const VIEW_H = 540;
@@ -208,6 +209,10 @@ function toast(s, msg, t, color) {
   s.toastColor = color || COL.gold;
 }
 
+function comboText(n) {
+  return String(n) + '连';
+}
+
 function lootKind(drop) {
   if (drop === '心核' || drop === 'core') return 'core';
   if (drop === '回星' || drop === 'heal') return 'heal';
@@ -253,6 +258,9 @@ function makeState() {
     lastBoomX: null,
     lastBoomY: null,
     boomSeekT: 0,
+    burstN: 0,
+    burstWait: 0,
+    lastCombo: 0,
   };
 }
 
@@ -308,6 +316,8 @@ function resetRoom(s, index, keepHearts) {
   s.lastBoomX = null;
   s.lastBoomY = null;
   s.boomSeekT = 0;
+  s.burstN = 0;
+  s.burstWait = 0;
   s.waters = (room.puddles || []).map(function (p) {
     return { x: p.x, y: p.y, w: p.w, h: p.h };
   });
@@ -441,7 +451,7 @@ function updateHound(s, e, dt) {
 
 function dropSpark(s, x, y, hot) {
   const wet = inWater(s, x, y);
-  s.sparks.push({ x: x, y: y, t: TAIL_T, hot: !!hot, wet: wet, dead: false });
+  s.sparks.push({ x: x, y: y, t: TAIL_T, hot: !!hot, wet: wet, dead: false, fuse: false });
   s.stats.drops += 1;
   return s.sparks[s.sparks.length - 1];
 }
@@ -610,7 +620,7 @@ function updateEmbers(s, dt, canHurt) {
   }
 }
 
-function explode(s, x, y, hot) {
+function explode(s, x, y, hot, fused) {
   const r = hot ? HOT_BLAST_R : BLAST_R;
   s.stats.booms += 1;
   s.lastBoomX = x;
@@ -677,6 +687,7 @@ function explode(s, x, y, hot) {
     if (k.x === x && k.y === y) continue;
     if (dist(k.x, k.y, x, y) <= r) {
       k.t = Math.min(k.t, CHAIN_T);
+      k.fuse = true;
       chained += 1;
     }
   }
@@ -688,6 +699,45 @@ function explode(s, x, y, hot) {
 
   if (hit) punch(s, 6);
   else punch(s, 2);
+  noteBoom(s, chained, !!fused);
+}
+
+function pendingFuse(s) {
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (k.dead || k.wet || !k.fuse) continue;
+    if (k.t <= CHAIN_T) return true;
+  }
+  return false;
+}
+
+function finishBurst(s) {
+  const n = s.burstN;
+  s.burstN = 0;
+  s.burstWait = 0;
+  if (n < COMBO_MIN) return;
+  s.lastCombo = n;
+  if (s.dead || s.won) return;
+  toast(s, comboText(n), 1.2, COL.gold);
+  punch(s, 10);
+}
+
+function noteBoom(s, chained, fused) {
+  if (chained > 0 || fused) s.burstN += 1;
+  if (s.burstN <= 0) return;
+  if (chained > 0 || pendingFuse(s)) {
+    s.burstWait = CHAIN_T + 0.05;
+    return;
+  }
+  finishBurst(s);
+}
+
+function tickBurst(s, dt) {
+  if (s.burstWait <= 0) return;
+  s.burstWait -= dt;
+  if (s.burstWait > 0) return;
+  if (pendingFuse(s)) s.burstWait = CHAIN_T;
+  else finishBurst(s);
 }
 
 function takeCore(s, it) {
@@ -730,12 +780,13 @@ function updateSparks(s, dt) {
       sfx('fizzle');
       toast(s, TOAST.fizzle, 1.1, COL.water);
     } else {
-      explode(s, k.x, k.y, k.hot);
+      explode(s, k.x, k.y, k.hot, k.fuse);
     }
   }
   if (s.sparks.length > 80) {
     s.sparks = s.sparks.filter(function (k) { return !k.dead; });
   }
+  tickBurst(s, dt);
 }
 
 function updateRings(s, dt) {
@@ -1334,10 +1385,13 @@ function roomHudText(s) {
   return (s.roomName || '') + ' · ' + (s.roomIndex + 1) + '/' + n;
 }
 
-function syncHud(s, heartsEl, toastEl, roomEl) {
+function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   heartsEl.textContent = '心×' + s.player.hearts;
   if (roomEl) {
     roomEl.textContent = roomHudText(s);
+  }
+  if (comboEl) {
+    comboEl.textContent = s.lastCombo >= COMBO_MIN ? comboText(s.lastCombo) : '';
   }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
@@ -1348,7 +1402,7 @@ function syncHud(s, heartsEl, toastEl, roomEl) {
   }
 }
 
-function startLoop(s, canvas, ctx, heartsEl, toastEl, roomEl) {
+function startLoop(s, canvas, ctx, heartsEl, toastEl, roomEl, comboEl) {
   let last = performance.now();
   function frame(now) {
     const dt = clamp((now - last) / 1000, 0, 0.033);
@@ -1357,7 +1411,7 @@ function startLoop(s, canvas, ctx, heartsEl, toastEl, roomEl) {
     const dpr = view.dpr;
     ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
     draw(s, ctx);
-    syncHud(s, heartsEl, toastEl, roomEl);
+    syncHud(s, heartsEl, toastEl, roomEl, comboEl);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -1369,6 +1423,7 @@ function boot() {
   const heartsEl = document.getElementById('hearts');
   const toastEl = document.getElementById('toast');
   const roomEl = document.getElementById('roomName') || document.getElementById('room');
+  const comboEl = document.getElementById('combo');
   const stick = document.getElementById('stick');
   const knob = document.getElementById('knob');
   const dashBtn = document.getElementById('dashBtn');
@@ -1384,7 +1439,7 @@ function boot() {
     if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
       touchRoot.hidden = false;
     }
-    startLoop(s, canvas, ctx, heartsEl, toastEl, roomEl);
+    startLoop(s, canvas, ctx, heartsEl, toastEl, roomEl, comboEl);
   }
 
   function fallback() {
@@ -1409,7 +1464,7 @@ function selfCheck() {
   ensureRooms();
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
-  if (!ROOMS || ROOMS.length !== 11) throw new Error('need 11 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  if (!ROOMS || (ROOMS.length !== 11 && ROOMS.length !== 12)) throw new Error('need 11 or 12 rooms, got ' + (ROOMS ? ROOMS.length : 0));
   const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径'];
   for (let i = 0; i < 11; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
@@ -1422,6 +1477,7 @@ function selfCheck() {
   if (ROOMS[8].id !== 'huilang') throw new Error('回廊 id');
   if (ROOMS[9].id !== 'dengxiang') throw new Error('灯巷 id');
   if (ROOMS[10].id !== 'huijing') throw new Error('灰径 id');
+  if (ROOMS.length === 12 && ROOMS[11].name !== '密线') throw new Error('room 12 密线');
 
   const fitJ = roomFit({ roomW: 960, roomH: 140 });
   if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
@@ -1663,6 +1719,24 @@ function selfCheck() {
   if (ch.stats.booms !== 1) throw new Error('same explode no re-trigger');
   for (let i = 0; i < 10; i++) update(ch, 0.016);
   if (ch.stats.booms < 3) throw new Error('cascade via timers');
+  for (let i = 0; i < 40; i++) update(ch, 0.016);
+  if (ch.stats.booms < COMBO_MIN) throw new Error('combo toast at 3+');
+  if (ch.toast !== comboText(ch.stats.booms)) throw new Error('combo toast ' + ch.toast);
+  if (ch.lastCombo < COMBO_MIN) throw new Error('lastCombo');
+  if (comboText(3) !== '3连' || comboText(5) !== '5连') throw new Error('3连/5连');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+
+  const duo = makeState();
+  resetRoom(duo, 0, false);
+  duo.player.x = 40;
+  duo.player.y = 40;
+  dropSpark(duo, 200, 200, false);
+  dropSpark(duo, 200 + SPARK_GAP, 200, false);
+  duo.sparks[0].t = 0;
+  for (let i = 0; i < 40; i++) update(duo, 0.016);
+  if (duo.stats.booms !== 2) throw new Error('duo chain size');
+  if (duo.toast === comboText(2)) throw new Error('no 2连');
+  if (duo.lastCombo >= COMBO_MIN) throw new Error('duo lastCombo');
 
   const hotCh = makeState();
   resetRoom(hotCh, 0, false);
