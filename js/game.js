@@ -5,6 +5,7 @@ const SPARK_GAP = 18;
 const BLAST_R = 36;
 const HOT_BLAST_R = 56;
 const CHAIN_T = 0.12;
+const EMBER_T = 0.55;
 const VIEW_W = 960;
 const VIEW_H = 540;
 const PLAYER_R = 11;
@@ -42,6 +43,7 @@ const NAMES = {
   spark: '焰辙',
   hound: '循辙',
   moth: '灯蛾',
+  ash: '余烬',
   hint: '跑过的路两秒后会爆',
 };
 
@@ -71,6 +73,8 @@ const TOAST = {
   loop: '回廊转起来了',
   moth: '灯蛾倒了',
   lure: '爆能引开灯蛾',
+  ember: '别踩余烬',
+  ash: '余烬还烫',
 };
 
 const COL = {
@@ -231,6 +235,7 @@ function makeState() {
     items: [],
     parts: [],
     rings: [],
+    embers: [],
     input: { x: 0, y: 0, dash: false },
     cam: { x: 0, y: 0, punch: 0 },
     hitstop: 0,
@@ -283,6 +288,7 @@ function resetRoom(s, index, keepHearts) {
   s.items.length = 0;
   s.parts.length = 0;
   s.rings.length = 0;
+  s.embers.length = 0;
   s.won = false;
   s.dead = false;
   s.pendingNext = 0;
@@ -335,6 +341,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '双刃') toast(s, TOAST.cut, 1.1, COL.water);
   else if (room.name === '回廊') toast(s, TOAST.loop, 1.3, COL.gold);
   else if (room.name === '灯巷') toast(s, TOAST.lure, 1.4, COL.gold);
+  else if (room.name === '灰径') toast(s, TOAST.ash, 1.4, COL.ember);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -530,7 +537,7 @@ function dashIFrame(p) {
 function hurtPlayer(s, srcX, srcY, why) {
   const p = s.player;
   if (s.won || s.dead || s.pendingNext > 0 || p.inv > 0) return false;
-  if (dashIFrame(p) && (why === 'blast' || why === 'bump')) return false;
+  if (dashIFrame(p) && (why === 'blast' || why === 'bump' || why === 'ember')) return false;
   p.hearts -= 1;
   p.inv = IFRAMES;
   s.flash = 0.22;
@@ -544,6 +551,7 @@ function hurtPlayer(s, srcX, srcY, why) {
   sfx('hurt');
   burst(s, p.x, p.y, 6, COL.heart, 110);
   if (why === 'blast') toast(s, TOAST.self, 1.1, COL.heart);
+  else if (why === 'ember') toast(s, TOAST.ember, 1.1, COL.ember);
   else if (why === 'oob') toast(s, TOAST.oob, 1.1, COL.heart);
   else toast(s, TOAST.bump, 1.1, COL.heart);
   if (p.hearts <= 0) {
@@ -554,12 +562,61 @@ function hurtPlayer(s, srcX, srcY, why) {
   return true;
 }
 
+function spawnEmber(s, x, y, r, hot) {
+  s.embers.push({
+    x: x, y: y, r: r,
+    t: EMBER_T,
+    life: EMBER_T,
+    hot: !!hot,
+    hitEnemies: [],
+  });
+}
+
+function hurtEnemyFromEmber(s, e, em) {
+  if (e.hp <= 0) return;
+  if (e.hitT > 0) return;
+  if (em.hitEnemies.indexOf(e) >= 0) return;
+  if (dist(e.x, e.y, em.x, em.y) > em.r + e.r) return;
+  em.hitEnemies.push(e);
+  e.hp -= 1;
+  e.hitT = 0.18;
+  const d = dist(e.x, e.y, em.x, em.y) || 1;
+  e.x += ((e.x - em.x) / d) * 14;
+  e.y += ((e.y - em.y) / d) * 14;
+  s.hitstop = Math.max(s.hitstop, hitstopAmt());
+  punch(s, 4);
+  if (e.hp <= 0) {
+    burst(s, e.x, e.y, isMoth(e) ? 10 : 12, isMoth(e) ? COL.gold : COL.ember, 140);
+    toast(s, isMoth(e) ? TOAST.moth : (isHound(e) ? TOAST.hound : TOAST.foe), 1.1, isMoth(e) ? COL.gold : COL.ember);
+  }
+}
+
+function updateEmbers(s, dt, canHurt) {
+  for (let i = s.embers.length - 1; i >= 0; i--) {
+    const em = s.embers[i];
+    em.t -= dt;
+    if (em.t <= 0) {
+      s.embers.splice(i, 1);
+      continue;
+    }
+    if (!canHurt) continue;
+    const p = s.player;
+    if (dist(p.x, p.y, em.x, em.y) <= em.r + p.r) {
+      hurtPlayer(s, em.x, em.y, 'ember');
+    }
+    for (let j = 0; j < s.enemies.length; j++) {
+      hurtEnemyFromEmber(s, s.enemies[j], em);
+    }
+  }
+}
+
 function explode(s, x, y, hot) {
   const r = hot ? HOT_BLAST_R : BLAST_R;
   s.stats.booms += 1;
   s.lastBoomX = x;
   s.lastBoomY = y;
   s.boomSeekT = MOTH_SEEK_T;
+  spawnEmber(s, x, y, r, hot);
   burst(s, x, y, hot ? 16 : 10, hot ? COL.gold : COL.ember, hot ? 220 : 170);
   addRing(s, x, y, r, hot);
   sfx('boom');
@@ -725,12 +782,14 @@ function update(s, dt) {
   if (s.pendingNext > 0) {
     s.pendingNext -= dt;
     updateSparks(s, dt);
+    updateEmbers(s, dt, false);
     if (s.pendingNext <= 0) goNext(s);
     return;
   }
 
   if (s.won || s.dead) {
     updateSparks(s, dt);
+    updateEmbers(s, dt, false);
     return;
   }
 
@@ -792,6 +851,7 @@ function update(s, dt) {
   }
 
   updateSparks(s, dt);
+  updateEmbers(s, dt, true);
 
   for (let i = 0; i < s.enemies.length; i++) {
     const e = s.enemies[i];
@@ -965,6 +1025,22 @@ function draw(s, ctx) {
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
+  }
+
+  for (let i = 0; i < s.embers.length; i++) {
+    const em = s.embers[i];
+    const k = clamp(em.t / em.life, 0, 1);
+    const rad = em.r * (0.88 + 0.12 * k);
+    if (rad < 2) continue;
+    const col = em.hot ? COL.gold : COL.ember;
+    glow(ctx, em.x, em.y, rad * 1.06, col, 0.1 + 0.26 * k);
+    ctx.globalAlpha = 0.22 + 0.52 * k;
+    ctx.strokeStyle = mixHex(COL.ember, COL.gold, em.hot ? 0.7 : 1 - k);
+    ctx.lineWidth = (2.4 + 2.6 * k) / fit.scale;
+    ctx.beginPath();
+    ctx.arc(em.x, em.y, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   for (let i = 0; i < s.items.length; i++) {
@@ -1332,9 +1408,10 @@ function boot() {
 function selfCheck() {
   ensureRooms();
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
-  if (!ROOMS || ROOMS.length !== 10) throw new Error('need 10 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷'];
-  for (let i = 0; i < 10; i++) {
+  if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
+  if (!ROOMS || ROOMS.length !== 11) throw new Error('need 11 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径'];
+  for (let i = 0; i < 11; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
     }
@@ -1344,6 +1421,7 @@ function selfCheck() {
   }
   if (ROOMS[8].id !== 'huilang') throw new Error('回廊 id');
   if (ROOMS[9].id !== 'dengxiang') throw new Error('灯巷 id');
+  if (ROOMS[10].id !== 'huijing') throw new Error('灰径 id');
 
   const fitJ = roomFit({ roomW: 960, roomH: 140 });
   if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
@@ -1353,7 +1431,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾', '余烬'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -1476,10 +1554,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/10') throw new Error('HUD 空场 1/10');
+  if (roomHudText(hud0) !== '空场 · 1/11') throw new Error('HUD 空场 1/11');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/10') throw new Error('HUD 3/10');
+  if (roomHudText(hud2) !== '水巷 · 3/11') throw new Error('HUD 3/11');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -1651,7 +1729,106 @@ function selfCheck() {
   }
   if (alleyCore !== 1) throw new Error('灯巷 心核');
   takeCore(alley, { x: 100, y: 100 });
-  if (!alley.won || alley.toast !== TOAST.all) throw new Error('灯巷 should 通关');
+  if (alley.won) throw new Error('灯巷 should not 通关');
+  for (let i = 0; i < 20; i++) update(alley, 0.1);
+  if (alley.roomName !== '灰径') throw new Error('core advances to 灰径');
+
+  const ashRoom = makeState();
+  resetRoom(ashRoom, 10, false);
+  if (ashRoom.roomName !== '灰径' || ashRoom.roomId !== 'huijing') throw new Error('huijing load');
+  if (ashRoom.toast !== TOAST.ash) throw new Error('灰径 intro');
+  if (ashRoom.roomH > 260) throw new Error('灰径 should be narrow-ish');
+  if (ashRoom.waters.length) throw new Error('灰径 dry so 余烬 stays');
+  let ashCore = 0;
+  for (let i = 0; i < ashRoom.crates.length; i++) {
+    if (ashRoom.crates[i].loot === 'core') ashCore += 1;
+  }
+  if (ashCore !== 1) throw new Error('灰径 心核');
+  takeCore(ashRoom, { x: 100, y: 100 });
+  if (!ashRoom.won || ashRoom.toast !== TOAST.all) throw new Error('灰径 should 通关');
+
+  const hudAsh = makeState();
+  resetRoom(hudAsh, 10, false);
+  if (roomHudText(hudAsh) !== '灰径 · 11/11') throw new Error('HUD 灰径 11/11');
+
+  const em = makeState();
+  resetRoom(em, 0, false);
+  em.player.x = 80;
+  em.player.y = 80;
+  explode(em, 400, 220, false);
+  if (!em.embers.length) throw new Error('boom spawns 余烬');
+  if (Math.abs(em.embers[0].r - BLAST_R) > 1e-9) throw new Error('余烬 radius = blast');
+  if (Math.abs(em.embers[0].t - EMBER_T) > 1e-9) throw new Error('余烬 life 0.55');
+  em.player.x = 400;
+  em.player.y = 220;
+  em.player.inv = 0;
+  em.player.dashT = 0;
+  const emHp = em.player.hearts;
+  update(em, 0.016);
+  if (em.player.hearts !== emHp - 1) throw new Error('余烬 can hurt');
+  if (em.toast !== TOAST.ember) throw new Error('别踩余烬');
+
+  const emDash = makeState();
+  resetRoom(emDash, 0, false);
+  emDash.player.x = 80;
+  emDash.player.y = 80;
+  explode(emDash, 400, 220, false);
+  emDash.player.x = 400;
+  emDash.player.y = 220;
+  emDash.player.inv = 0;
+  emDash.player.dashT = DASH_TIME;
+  const emDashHp = emDash.player.hearts;
+  update(emDash, 0.016);
+  if (emDash.player.hearts !== emDashHp) throw new Error('dash i-frame 余烬');
+
+  const emInv = makeState();
+  resetRoom(emInv, 0, false);
+  emInv.player.x = 80;
+  emInv.player.y = 80;
+  explode(emInv, 400, 220, false);
+  emInv.player.x = 400;
+  emInv.player.y = 220;
+  emInv.player.inv = IFRAMES;
+  emInv.player.dashT = 0;
+  const emInvHp = emInv.player.hearts;
+  update(emInv, 0.016);
+  if (emInv.player.hearts !== emInvHp) throw new Error('hit-invuln 余烬');
+
+  const emHot = makeState();
+  resetRoom(emHot, 0, false);
+  emHot.player.x = 80;
+  emHot.player.y = 80;
+  explode(emHot, 400, 220, true);
+  if (Math.abs(emHot.embers[0].r - HOT_BLAST_R) > 1e-9) throw new Error('hot 余烬 radius');
+
+  const emGone = makeState();
+  resetRoom(emGone, 0, false);
+  emGone.player.x = 80;
+  emGone.player.y = 80;
+  explode(emGone, 400, 220, false);
+  for (let i = 0; i < 40; i++) update(emGone, 0.02);
+  if (emGone.embers.length) throw new Error('余烬 fades at 0.55s');
+  emGone.player.x = 400;
+  emGone.player.y = 220;
+  emGone.player.inv = 0;
+  const goneHp = emGone.player.hearts;
+  update(emGone, 0.016);
+  if (emGone.player.hearts !== goneHp) throw new Error('dead 余烬 no hurt');
+
+  const emFoe = makeState();
+  resetRoom(emFoe, 1, false);
+  const foeEm = emFoe.enemies[0];
+  if (!foeEm) throw new Error('余烬 enemy need 烬卫');
+  emFoe.player.x = 40;
+  emFoe.player.y = 40;
+  emFoe.player.inv = 2;
+  explode(emFoe, 700, 80, false);
+  foeEm.x = 700;
+  foeEm.y = 80;
+  foeEm.hitT = 0;
+  const foeHp = foeEm.hp;
+  update(emFoe, 0.016);
+  if (foeEm.hp !== foeHp - 1) throw new Error('余烬 can hurt enemy');
 
   const mothIdle = makeState();
   resetRoom(mothIdle, 9, false);
