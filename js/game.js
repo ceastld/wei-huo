@@ -74,6 +74,10 @@ const CURTAIN_N = 5;
 const CURTAIN_X = 160;
 const CURTAIN_GAP = 50;
 const CURTAIN_DT = 0.10;
+const GATE_N = 6;
+const GATE_X = 140;
+const GATE_GAP = 55;
+const GATE_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -172,6 +176,7 @@ const NAMES = {
   frame: '框爆',
   coil: '螺爆',
   curtain: '帘爆',
+  gate: '门爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -312,6 +317,9 @@ const TOAST = {
   curtainGet: '捡到帘爆',
   curtainUse: '帘子落下来了',
   curtainRoom: '帘子清场',
+  gateGet: '捡到门爆',
+  gateUse: '门框立起来了',
+  gateRoom: '门框清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -357,6 +365,7 @@ const COL = {
   frame: '#7cffd4',
   coil: '#ff6ad5',
   curtain: '#c4b5ff',
+  gate: '#ffb347',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -620,6 +629,7 @@ function lootKind(drop) {
   if (drop === '框爆' || drop === 'frame') return 'frame';
   if (drop === '螺爆' || drop === 'coil') return 'coil';
   if (drop === '帘爆' || drop === 'curtain') return 'curtain';
+  if (drop === '门爆' || drop === 'gate') return 'gate';
   return null;
 }
 
@@ -700,6 +710,7 @@ function makeState() {
     frameReady: false,
     coilReady: false,
     curtainReady: false,
+    gateReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -719,6 +730,7 @@ function makeState() {
     frames: [],
     coils: [],
     curtains: [],
+    gates: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -849,6 +861,7 @@ function resetRoom(s, index, keepHearts) {
   s.frameReady = false;
   s.coilReady = false;
   s.curtainReady = false;
+  s.gateReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -897,6 +910,8 @@ function resetRoom(s, index, keepHearts) {
   s.coils.length = 0;
   if (!s.curtains) s.curtains = [];
   s.curtains.length = 0;
+  if (!s.gates) s.gates = [];
+  s.gates.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -1024,6 +1039,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '框廊') toast(s, TOAST.frameRoom, 1.4, COL.frame);
   else if (room.name === '螺廊') toast(s, TOAST.coilRoom, 1.4, COL.coil);
   else if (room.name === '帘廊') toast(s, TOAST.curtainRoom, 1.4, COL.curtain);
+  else if (room.name === '门廊') toast(s, TOAST.gateRoom, 1.4, COL.gate);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1890,6 +1906,32 @@ function updateCurtains(s, dt) {
   }
 }
 
+function updateGates(s, dt) {
+  if (!s.gates || !s.gates.length) return;
+  const fires = [];
+  for (let i = s.gates.length - 1; i >= 0; i--) {
+    const p = s.gates[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.gates.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.gate, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.gate, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -2107,6 +2149,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.curtainReady) {
     s.curtainReady = false;
     hanging = true;
+  }
+  let gating = false;
+  if (!forked && s.gateReady) {
+    s.gateReady = false;
+    gating = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2780,6 +2827,27 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, '#ffffff', 160);
     }
   }
+  if (gating) {
+    if (!s.gates) s.gates = [];
+    for (let i = 0; i < GATE_N; i++) {
+      const west = i < 3;
+      const row = i % 3;
+      s.gates.push({
+        x: Math.round(x + (west ? -GATE_X : GATE_X)),
+        y: Math.round(y + (row - 1) * GATE_GAP),
+        t: GATE_DT * (i + 1),
+        ox: x,
+        oy: y,
+      });
+    }
+    toast(s, TOAST.gateUse, 1.1, COL.gate);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.gate, 170);
+      burst(s, x, y, 4, '#ffffff', 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -3060,6 +3128,7 @@ function watchSteer(s, dt) {
   let frameIt = null;
   let coilIt = null;
   let curtainIt = null;
+  let gateIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -3094,8 +3163,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'frame') frameIt = it;
     if (it.kind === 'coil') coilIt = it;
     if (it.kind === 'curtain') curtainIt = it;
+    if (it.kind === 'gate') gateIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3253,6 +3323,10 @@ function watchSteer(s, dt) {
   } else if (!s.curtainReady && curtainIt) {
     tx = curtainIt.x - p.x;
     ty = curtainIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.gateReady && gateIt) {
+    tx = gateIt.x - p.x;
+    ty = gateIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3441,6 +3515,7 @@ function update(s, dt) {
     updateFrames(s, dt);
     updateCoils(s, dt);
     updateCurtains(s, dt);
+    updateGates(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3470,6 +3545,7 @@ function update(s, dt) {
     updateFrames(s, dt);
     updateCoils(s, dt);
     updateCurtains(s, dt);
+    updateGates(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3591,6 +3667,7 @@ function update(s, dt) {
   updateFrames(s, dt);
   updateCoils(s, dt);
   updateCurtains(s, dt);
+  updateGates(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3840,6 +3917,13 @@ function update(s, dt) {
       toast(s, TOAST.curtainGet, 1.1, COL.curtain);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.curtain, 130);
+      burst(s, it.x, it.y, 4, '#ffffff', 110);
+      punch(s, 3);
+    } else if (it.kind === 'gate') {
+      s.gateReady = true;
+      toast(s, TOAST.gateGet, 1.1, COL.gate);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.gate, 130);
       burst(s, it.x, it.y, 4, '#ffffff', 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -4661,6 +4745,27 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.curtain, it.x, it.y - 16);
+    } else if (it.kind === 'gate') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.gate, 0.7);
+      glow(ctx, it.x, it.y, 8, '#ffffff', 0.35);
+      ctx.fillStyle = COL.gate;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(it.x - 4.2, it.y - 6);
+      ctx.lineTo(it.x - 4.2, it.y + 6);
+      ctx.moveTo(it.x + 4.2, it.y - 6);
+      ctx.lineTo(it.x + 4.2, it.y + 6);
+      ctx.moveTo(it.x - 4.2, it.y - 6);
+      ctx.lineTo(it.x + 4.2, it.y - 6);
+      ctx.stroke();
+      ctx.fillStyle = COL.gate;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.gate, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -5360,6 +5465,47 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('帘', p.x, p.y - 12);
+    }
+  }
+
+  if (s.gates && s.gates.length) {
+    for (let i = 0; i < s.gates.length; i++) {
+      const p = s.gates[i];
+      const maxT = GATE_DT * GATE_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.gate, 0.28);
+      ctx.strokeStyle = COL.gate;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x - 4, p.y - 10);
+      ctx.lineTo(p.x - 4, p.y + 10);
+      ctx.moveTo(p.x + 4, p.y - 10);
+      ctx.lineTo(p.x + 4, p.y + 10);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.gate;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.gate;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('门', p.x, p.y - 12);
     }
   }
 
@@ -6297,6 +6443,31 @@ function draw(s, ctx) {
     ctx.lineTo(nx, ny + 2.6);
     ctx.stroke();
   }
+  if (s.gateReady) {
+    let gx;
+    let gy;
+    if (reducedMotion()) {
+      gx = p.x + 4;
+      gy = p.y + 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15 + Math.PI * 5.4 + Math.PI * 5.65 + Math.PI * 5.9;
+      gx = p.x + Math.cos(a) * 16;
+      gy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, gx, gy, 8, COL.gate, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.gate;
+    ctx.arc(gx, gy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.moveTo(gx - 2.2, gy - 2.6);
+    ctx.lineTo(gx - 2.2, gy + 2.6);
+    ctx.moveTo(gx + 2.2, gy - 2.6);
+    ctx.lineTo(gx + 2.2, gy + 2.6);
+    ctx.stroke();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -6747,6 +6918,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (crossEl && s.curtainReady && !s.crossReady) {
     crossEl.textContent = NAMES.curtain;
   }
+  const gateEl = (typeof document !== 'undefined') ? document.getElementById('gate') : null;
+  if (gateEl) {
+    gateEl.textContent = s.gateReady ? NAMES.gate : '';
+  } else if (curtainEl && s.gateReady && !s.curtainReady) {
+    curtainEl.textContent = NAMES.gate;
+  } else if (coilEl && s.gateReady && !s.coilReady) {
+    coilEl.textContent = NAMES.gate;
+  } else if (frameEl && s.gateReady && !s.frameReady) {
+    frameEl.textContent = NAMES.gate;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -6903,10 +7084,14 @@ function selfCheck() {
   if (CURTAIN_X !== 160) throw new Error('CURTAIN_X 160');
   if (CURTAIN_GAP !== 50) throw new Error('CURTAIN_GAP 50');
   if (CURTAIN_DT !== 0.10) throw new Error('CURTAIN_DT 0.10');
+  if (GATE_N !== 6) throw new Error('GATE_N 6');
+  if (GATE_X !== 140) throw new Error('GATE_X 140');
+  if (GATE_GAP !== 55) throw new Error('GATE_GAP 55');
+  if (GATE_DT !== 0.10) throw new Error('GATE_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 48) throw new Error('need 48 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊'];
+  if (!ROOMS || ROOMS.length !== 49) throw new Error('need 49 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -6992,6 +7177,8 @@ function selfCheck() {
   if (ROOMS[46].name !== '螺廊') throw new Error('room 47 螺廊');
   if (ROOMS[47].id !== 'lianlang') throw new Error('帘廊 id');
   if (ROOMS[47].name !== '帘廊') throw new Error('room 48 帘廊');
+  if (ROOMS[48].id !== 'menlang') throw new Error('门廊 id');
+  if (ROOMS[48].name !== '门廊') throw new Error('room 49 门廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -7041,6 +7228,9 @@ function selfCheck() {
   if (NAMES.curtain !== '帘爆') throw new Error('NAMES.curtain');
   if (COL.curtain !== '#c4b5ff') throw new Error('COL.curtain');
   if (lootKind('帘爆') !== 'curtain' || lootKind('curtain') !== 'curtain') throw new Error('lootKind 帘爆');
+  if (NAMES.gate !== '门爆') throw new Error('NAMES.gate');
+  if (COL.gate !== '#ffb347') throw new Error('COL.gate');
+  if (lootKind('门爆') !== 'gate' || lootKind('gate') !== 'gate') throw new Error('lootKind 门爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -7063,7 +7253,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -8603,6 +8793,7 @@ function selfCheck() {
   if (lootKind('框爆') !== 'frame' || lootKind('frame') !== 'frame') throw new Error('lootKind 框爆');
   if (lootKind('螺爆') !== 'coil' || lootKind('coil') !== 'coil') throw new Error('lootKind 螺爆');
   if (lootKind('帘爆') !== 'curtain' || lootKind('curtain') !== 'curtain') throw new Error('lootKind 帘爆');
+  if (lootKind('门爆') !== 'gate' || lootKind('gate') !== 'gate') throw new Error('lootKind 门爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -14057,6 +14248,7 @@ function selfCheck() {
   bothP.frameReady = true;
   bothP.coilReady = true;
   bothP.curtainReady = true;
+  bothP.gateReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -14072,6 +14264,7 @@ function selfCheck() {
   if (bothP.frameReady) throw new Error('same boom spends 框爆');
   if (bothP.coilReady) throw new Error('same boom spends 螺爆');
   if (bothP.curtainReady) throw new Error('same boom spends 帘爆');
+  if (bothP.gateReady) throw new Error('same boom spends 门爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -14083,6 +14276,7 @@ function selfCheck() {
   if (!bothP.frames || bothP.frames.length !== 8) throw new Error('same boom frames');
   if (!bothP.coils || bothP.coils.length !== COIL_N) throw new Error('same boom coils');
   if (!bothP.curtains || bothP.curtains.length !== CURTAIN_N) throw new Error('same boom curtains');
+  if (!bothP.gates || bothP.gates.length !== GATE_N) throw new Error('same boom gates');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -16631,11 +16825,20 @@ function selfCheck() {
   lian.hitstop = 0;
   updateSpins(lian, SPIN_DT * SPIN_N + 0.05);
   if (lian.curtainReady !== true) throw new Error('帘廊 spin-orbit does not consume');
+  lian.gateReady = true;
+  explode(lian, 200, 200, false);
+  lian.curtainReady = true;
+  lian.hitstop = 0;
+  updateGates(lian, GATE_DT * GATE_N + 0.05);
+  if (lian.curtainReady !== true) throw new Error('帘廊 gate-seat does not consume');
   lian.waters = [];
   explode(lian, lianBox.x + lianBox.w * 0.5, lianBox.y - 20, false);
   if (!lianBox.open) throw new Error('帘廊 dry trail should open 心核');
   takeCore(lian, { x: 100, y: 100 });
-  if (!lian.won || lian.toast !== TOAST.all) throw new Error('帘廊 should 通关');
+  if (lian.won) throw new Error('帘廊 should not 通关');
+  if (lian.toast !== TOAST.core) throw new Error('帘廊 过关');
+  for (let i = 0; i < 20; i++) update(lian, 0.1);
+  if (lian.roomName !== '门廊') throw new Error('core advances to 门廊');
   const hudLian = makeState();
   resetRoom(hudLian, 47, false);
   if (roomHudText(hudLian).indexOf('帘廊 · 48/') !== 0) throw new Error('HUD 帘廊 48/n');
@@ -16650,6 +16853,362 @@ function selfCheck() {
   if (TOAST.curtainGet !== '捡到帘爆') throw new Error('捡到帘爆');
   if (TOAST.curtainUse !== '帘子落下来了') throw new Error('帘子落下来了 toast');
   if (TOAST.curtainRoom !== '帘子清场') throw new Error('帘子清场');
+
+  const men = makeState();
+  resetRoom(men, 48, false);
+  if (men.roomName !== '门廊' || men.roomId !== 'menlang') throw new Error('menlang load');
+  if (men.toast !== TOAST.gateRoom) throw new Error('门廊 intro');
+  if (men.roomW !== 960 || men.roomH !== 400) throw new Error('门廊 size');
+  if (men.player.x !== 400 || men.player.y !== 60) throw new Error('门廊 spawn');
+  if (men.gateReady) throw new Error('门廊 gate starts false');
+  if (!men.gates || men.gates.length) throw new Error('门廊 gates start empty');
+  let menStill = 0;
+  let menTide = 0;
+  for (let i = 0; i < men.waters.length; i++) {
+    if (men.waters[i].tide) menTide += 1;
+    else menStill += 1;
+  }
+  if (menStill < 1) throw new Error('门廊 needs static 水洼');
+  if (menTide) throw new Error('门廊 no tide');
+  let menCore = 0;
+  let menHeal = 0;
+  let menThick = 0;
+  let menGateItem = 0;
+  let menCurtainItem = 0;
+  let menCoilItem = 0;
+  let menFrameItem = 0;
+  let menCrossItem = 0;
+  let menStarItem = 0;
+  let menWaveItem = 0;
+  for (let i = 0; i < men.crates.length; i++) {
+    if (men.crates[i].loot === 'core') menCore += 1;
+    if (men.crates[i].loot === 'heal') menHeal += 1;
+    if (men.crates[i].thick) menThick += 1;
+  }
+  for (let i = 0; i < men.items.length; i++) {
+    if (men.items[i].kind === 'gate') menGateItem += 1;
+    if (men.items[i].kind === 'curtain') menCurtainItem += 1;
+    if (men.items[i].kind === 'coil') menCoilItem += 1;
+    if (men.items[i].kind === 'frame') menFrameItem += 1;
+    if (men.items[i].kind === 'cross') menCrossItem += 1;
+    if (men.items[i].kind === 'star') menStarItem += 1;
+    if (men.items[i].kind === 'wave') menWaveItem += 1;
+  }
+  if (menGateItem < 1) throw new Error('门廊 needs 门爆');
+  if (menCurtainItem || menCoilItem || menFrameItem || menCrossItem || menStarItem || menWaveItem) throw new Error('门廊 no extra pickup');
+  if (menCore !== 1) throw new Error('门廊 心核');
+  if (menHeal < 1) throw new Error('门廊 回星');
+  const menBox = men.crates.find(function (c) { return c.loot === 'core'; });
+  if (!menBox || menBox.thick) throw new Error('门廊 心核 crate is not thick');
+  if (menThick) throw new Error('门廊 no thick crate');
+  let menHound = 0;
+  let menGuard = 0;
+  let menMoth = 0;
+  let menEater = 0;
+  let menShell = 0;
+  let menBoomer = 0;
+  for (let i = 0; i < men.enemies.length; i++) {
+    if (isHound(men.enemies[i])) menHound += 1;
+    else if (isMoth(men.enemies[i])) menMoth += 1;
+    else if (isEater(men.enemies[i])) menEater += 1;
+    else if (isShell(men.enemies[i])) menShell += 1;
+    else if (isBoomer(men.enemies[i])) menBoomer += 1;
+    else menGuard += 1;
+  }
+  if (menGuard !== 6 || menHound !== 0 || menMoth !== 0 || menEater !== 0 || menShell !== 0 || menBoomer !== 0) {
+    throw new Error('门廊 烬卫 only');
+  }
+  if (inWater(men, 400, 60) || inOil(men, 400, 60)) throw new Error('门廊 spawn dry');
+  if (inWater(men, 400, 120) || inOil(men, 400, 120)) throw new Error('门廊 门爆 dry');
+  if (inWater(men, 400, 200) || inOil(men, 400, 200)) throw new Error('门廊 plant dry');
+  if (inOil(men, 400, 360) || inWater(men, 400, 360)) throw new Error('门廊 core dry');
+  if (inWater(men, 260, 145) || inOil(men, 260, 145)) throw new Error('门廊 烬卫 dry WT');
+  if (inWater(men, 260, 200) || inOil(men, 260, 200)) throw new Error('门廊 烬卫 dry WM');
+  if (inWater(men, 260, 255) || inOil(men, 260, 255)) throw new Error('门廊 烬卫 dry WB');
+  if (inWater(men, 540, 145) || inOil(men, 540, 145)) throw new Error('门廊 烬卫 dry ET');
+  if (inWater(men, 540, 200) || inOil(men, 540, 200)) throw new Error('门廊 烬卫 dry EM');
+  if (inWater(men, 540, 255) || inOil(men, 540, 255)) throw new Error('门廊 烬卫 dry EB');
+  if (!inWater(men, 770, 365)) throw new Error('门廊 wet bag');
+  if (inWater(men, 400, 60)) throw new Error('门廊 north pocket wet');
+  for (let i = 0; i < men.crates.length; i++) {
+    const c = men.crates[i];
+    if (circleRect(men.player.x, men.player.y, men.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('门廊 crate on spawn');
+    }
+  }
+  for (let y = 60; y <= 200; y += 10) {
+    for (let i = 0; i < men.crates.length; i++) {
+      const c = men.crates[i];
+      if (circleRect(400, y, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('门廊 crate on dry walk');
+      }
+    }
+  }
+  const menWT = men.enemies.find(function (e) { return Math.abs(e.x - 260) < 1 && Math.abs(e.y - 145) < 1; });
+  const menWM = men.enemies.find(function (e) { return Math.abs(e.x - 260) < 1 && Math.abs(e.y - 200) < 1; });
+  const menWB = men.enemies.find(function (e) { return Math.abs(e.x - 260) < 1 && Math.abs(e.y - 255) < 1; });
+  const menET = men.enemies.find(function (e) { return Math.abs(e.x - 540) < 1 && Math.abs(e.y - 145) < 1; });
+  const menEM = men.enemies.find(function (e) { return Math.abs(e.x - 540) < 1 && Math.abs(e.y - 200) < 1; });
+  const menEB = men.enemies.find(function (e) { return Math.abs(e.x - 540) < 1 && Math.abs(e.y - 255) < 1; });
+  if (!menWT || !menWM || !menWB || !menET || !menEM || !menEB) throw new Error('门廊 six 烬卫 seats');
+  const menSeats = [menWT, menWM, menWB, menET, menEM, menEB];
+  for (let i = 0; i < menSeats.length; i++) {
+    const e = menSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('门廊 primary misses 烬卫');
+    if (e.x < 40 || e.y < 40 || e.x > 960 - 40 || e.y > 400 - 40) throw new Error('门廊 烬卫 margin');
+  }
+  const gateSeatPos = [];
+  for (let i = 0; i < GATE_N; i++) {
+    const west = i < 3;
+    const row = i % 3;
+    gateSeatPos.push([
+      Math.round(400 + (west ? -GATE_X : GATE_X)),
+      Math.round(200 + (row - 1) * GATE_GAP),
+    ]);
+  }
+  if (Math.abs(gateSeatPos[0][0] - 260) > 1e-6 || Math.abs(gateSeatPos[0][1] - 145) > 1e-6) throw new Error('gate formula 0');
+  if (Math.abs(gateSeatPos[1][0] - 260) > 1e-6 || Math.abs(gateSeatPos[1][1] - 200) > 1e-6) throw new Error('gate formula 1');
+  if (Math.abs(gateSeatPos[2][0] - 260) > 1e-6 || Math.abs(gateSeatPos[2][1] - 255) > 1e-6) throw new Error('gate formula 2');
+  if (Math.abs(gateSeatPos[3][0] - 540) > 1e-6 || Math.abs(gateSeatPos[3][1] - 145) > 1e-6) throw new Error('gate formula 3');
+  if (Math.abs(gateSeatPos[4][0] - 540) > 1e-6 || Math.abs(gateSeatPos[4][1] - 200) > 1e-6) throw new Error('gate formula 4');
+  if (Math.abs(gateSeatPos[5][0] - 540) > 1e-6 || Math.abs(gateSeatPos[5][1] - 255) > 1e-6) throw new Error('gate formula 5');
+  for (let i = 0; i < menSeats.length; i++) {
+    const e = menSeats[i];
+    let hit = false;
+    for (let k = 0; k < gateSeatPos.length; k++) {
+      if (dist(e.x, e.y, gateSeatPos[k][0], gateSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('门廊 hot gate reaches 烬卫');
+  }
+  const menGround = men.items.find(function (it) { return it.kind === 'gate' && !it.taken; });
+  if (!menGround) throw new Error('门廊 ground 门爆 present');
+  if (Math.abs(menGround.x - 400) > 1e-6 || Math.abs(menGround.y - 120) > 1e-6) throw new Error('门廊 pickup seat');
+  let menPickGuard = 1e9;
+  for (let i = 0; i < menSeats.length; i++) {
+    const d = dist(menGround.x, menGround.y, menSeats[i].x, menSeats[i].y);
+    if (d < menPickGuard) menPickGuard = d;
+  }
+  if (menPickGuard <= HOT_BLAST_R + ENEMY_R) throw new Error('门廊 pickup too close to seat');
+  const menCoreCx = menBox.x + menBox.w * 0.5;
+  const menCoreCy = menBox.y + menBox.h * 0.5;
+  if (!(dist(menCoreCx, menCoreCy, 400, 200) > HOT_BLAST_R)) throw new Error('门廊 core outside plant blast');
+  if (!(dist(menCoreCx, menCoreCy, 260, 200) > HOT_BLAST_R)) throw new Error('门廊 core outside west post');
+  if (!(dist(menCoreCx, menCoreCy, 540, 200) > HOT_BLAST_R)) throw new Error('门廊 core outside east post');
+  men.player.x = 400;
+  men.player.y = 60;
+  men.player.hearts = 3;
+  men.player.inv = 2;
+  men.hitstop = 0;
+  men.embers.length = 0;
+  men.player.x = menGround.x;
+  men.player.y = menGround.y;
+  update(men, 0.016);
+  if (men.gateReady !== true) throw new Error('pick gate → gateReady');
+  if (men.toast !== TOAST.gateGet) throw new Error('捡到门爆 room');
+  men.player.x = 400;
+  men.player.y = 60;
+  men.player.inv = 2;
+  men.hitstop = 0;
+  men.embers.length = 0;
+  const menHpWT = menWT.hp;
+  const menHpWM = menWM.hp;
+  const menHpWB = menWB.hp;
+  const menHpET = menET.hp;
+  const menHpEM = menEM.hp;
+  const menHpEB = menEB.hp;
+  explode(men, 400, 200, false);
+  if (men.gateReady) throw new Error('门廊 gate spends');
+  if (men.toast !== TOAST.gateUse) throw new Error('门框立起来了 room');
+  if (!men.gates || men.gates.length !== 6) throw new Error('门廊 gates queued');
+  if (Math.abs(men.gates[0].x - 260) > 1e-6 || Math.abs(men.gates[0].y - 145) > 1e-6) throw new Error('门廊 seat 0');
+  if (Math.abs(men.gates[1].x - 260) > 1e-6 || Math.abs(men.gates[1].y - 200) > 1e-6) throw new Error('门廊 seat 1');
+  if (Math.abs(men.gates[2].x - 260) > 1e-6 || Math.abs(men.gates[2].y - 255) > 1e-6) throw new Error('门廊 seat 2');
+  if (Math.abs(men.gates[3].x - 540) > 1e-6 || Math.abs(men.gates[3].y - 145) > 1e-6) throw new Error('门廊 seat 3');
+  if (Math.abs(men.gates[4].x - 540) > 1e-6 || Math.abs(men.gates[4].y - 200) > 1e-6) throw new Error('门廊 seat 4');
+  if (Math.abs(men.gates[5].x - 540) > 1e-6 || Math.abs(men.gates[5].y - 255) > 1e-6) throw new Error('门廊 seat 5');
+  if (Math.abs(men.gates[0].t - GATE_DT) > 1e-6) throw new Error('门廊 dt 1');
+  if (Math.abs(men.gates[1].t - GATE_DT * 2) > 1e-6) throw new Error('门廊 dt 2');
+  if (Math.abs(men.gates[5].t - GATE_DT * 6) > 1e-6) throw new Error('门廊 dt 6');
+  if (menWT.hp !== menHpWT || menWM.hp !== menHpWM || menWB.hp !== menHpWB || menET.hp !== menHpET || menEM.hp !== menHpEM || menEB.hp !== menHpEB) {
+    throw new Error('门廊 primary misses');
+  }
+  men.hitstop = 0;
+  updateGates(men, GATE_DT + 0.01);
+  if (men.gates.length !== 5) throw new Error('门廊 first gate WT');
+  if (!(menWT.hp === menHpWT - 2 || menWT.hp <= 0)) throw new Error('门廊 WT first seat');
+  menWT.x = 260;
+  menWT.y = 145;
+  menWM.x = 260;
+  menWM.y = 200;
+  menWB.x = 260;
+  menWB.y = 255;
+  menET.x = 540;
+  menET.y = 145;
+  menEM.x = 540;
+  menEM.y = 200;
+  menEB.x = 540;
+  menEB.y = 255;
+  men.hitstop = 0;
+  updateGates(men, GATE_DT * 5 + 0.05);
+  if (men.gates.length !== 0) throw new Error('门廊 gates finish');
+  if (!(menWT.hp === menHpWT - 2 || menWT.hp <= 0)) throw new Error('门廊 gate dmg WT');
+  if (!(menWM.hp === menHpWM - 2 || menWM.hp <= 0)) throw new Error('门廊 gate dmg WM');
+  if (!(menWB.hp === menHpWB - 2 || menWB.hp <= 0)) throw new Error('门廊 gate dmg WB');
+  if (!(menET.hp === menHpET - 2 || menET.hp <= 0)) throw new Error('门廊 gate dmg ET');
+  if (!(menEM.hp === menHpEM - 2 || menEM.hp <= 0)) throw new Error('门廊 gate dmg EM');
+  if (!(menEB.hp === menHpEB - 2 || menEB.hp <= 0)) throw new Error('门廊 gate dmg EB');
+  men.gateReady = true;
+  dropSpark(men, 400, 90, false);
+  if (men.gateReady !== true) throw new Error('dropSpark keeps 门爆');
+  men.input.dash = true;
+  men.player.dashT = 0;
+  men.player.dashCd = 0;
+  men.hitstop = 0;
+  update(men, 0.016);
+  if (men.gateReady !== true) throw new Error('dash does not consume 门爆');
+  const gateSelf = makeState();
+  resetRoom(gateSelf, 0, false);
+  gateSelf.gateReady = true;
+  gateSelf.player.x = 260;
+  gateSelf.player.y = 145;
+  gateSelf.player.inv = 0;
+  gateSelf.player.hearts = 3;
+  explode(gateSelf, 400, 200, false);
+  if (gateSelf.player.hearts !== 3) throw new Error('primary dry misses player for gate');
+  gateSelf.hitstop = 0;
+  updateGates(gateSelf, GATE_DT + 0.01);
+  if (gateSelf.player.hearts !== 2) throw new Error('own gate hurts player');
+  gateSelf.player.hearts = 3;
+  gateSelf.player.inv = 0;
+  gateSelf.player.dashT = DASH_TIME;
+  gateSelf.gates = [{ x: 260, y: 145, t: 0, ox: 400, oy: 200 }];
+  gateSelf.hitstop = 0;
+  updateGates(gateSelf, 0.02);
+  if (gateSelf.player.hearts !== 3) throw new Error('dash i-frames skip gate');
+  men.gateReady = true;
+  men.sparks.length = 0;
+  if (men.gates) men.gates.length = 0;
+  men.player.x = 400;
+  men.player.y = 60;
+  men.player.dashT = 0;
+  men.player.dashCd = 0;
+  men.player.vx = 0;
+  men.player.vy = 0;
+  men.player.inv = 2;
+  men.input.x = 0;
+  men.input.y = 0;
+  men.input.dash = false;
+  men.hitstop = 0;
+  men.waters = [{ x: 360, y: 40, w: 80, h: 80 }];
+  dropSpark(men, 400, 80, false);
+  if (!men.sparks[men.sparks.length - 1].wet) throw new Error('门廊 wet spark');
+  const menBooms = men.stats.booms;
+  for (let i = 0; i < 24; i++) update(men, 0.1);
+  if (men.gateReady !== true) throw new Error('门廊 wet fizzle does not consume');
+  if (men.stats.booms !== menBooms) throw new Error('门廊 wet no extra boom');
+  men.waters = [];
+  explode(men, 200, 200, false, false, false, { fork: true });
+  if (men.gateReady !== true) throw new Error('门廊 fork does not consume');
+  men.echoReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  for (let i = 0; i < 12; i++) update(men, 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 echo does not consume');
+  men.fanReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateFans(men, FAN_DT * FAN_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 fan-fork does not consume');
+  men.drumReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateDrums(men, 0.55);
+  if (men.gateReady !== true) throw new Error('门廊 drum-wave does not consume');
+  men.pulseReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updatePulses(men, PULSE_DT * PULSE_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 pulse-aftershock does not consume');
+  men.rainReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateRains(men, RAIN_DT * RAIN_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 rain-drop does not consume');
+  men.springReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateSprings(men, SPRING_DT * SPRING_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 spring-jet does not consume');
+  men.waveReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateWaves(men, WAVE_DT * WAVE_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 wave-seat does not consume');
+  men.starReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateStars(men, STAR_DT * STAR_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 star-seat does not consume');
+  men.crossReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateCrosses(men, CROSS_DT * CROSS_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 cross-seat does not consume');
+  men.frameReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateFrames(men, FRAME_DT * 8 + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 frame-seat does not consume');
+  men.coilReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateCoils(men, COIL_DT * COIL_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 coil-seat does not consume');
+  men.curtainReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateCurtains(men, CURTAIN_DT * CURTAIN_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 curtain-seat does not consume');
+  men.spinReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateSpins(men, SPIN_DT * SPIN_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 spin-orbit does not consume');
+  men.waters = [];
+  explode(men, menBox.x + menBox.w * 0.5, menBox.y - 20, false);
+  if (!menBox.open) throw new Error('门廊 dry trail should open 心核');
+  takeCore(men, { x: 100, y: 100 });
+  if (!men.won || men.toast !== TOAST.all) throw new Error('门廊 should 通关');
+  const hudMen = makeState();
+  resetRoom(hudMen, 48, false);
+  if (roomHudText(hudMen).indexOf('门廊 · 49/') !== 0) throw new Error('HUD 门廊 49/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (GATE_N !== 6) throw new Error('GATE_N 6');
+  if (GATE_X !== 140) throw new Error('GATE_X 140');
+  if (GATE_GAP !== 55) throw new Error('GATE_GAP 55');
+  if (GATE_DT !== 0.10) throw new Error('GATE_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.gateGet !== '捡到门爆') throw new Error('捡到门爆');
+  if (TOAST.gateUse !== '门框立起来了') throw new Error('门框立起来了 toast');
+  if (TOAST.gateRoom !== '门框清场') throw new Error('门框清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
