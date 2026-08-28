@@ -20,7 +20,12 @@ const HOUND_IDLE = 22;
 const HOUND_SEEK = 88;
 const HOUND_ROAD = 246;
 const HOUND_MOUNT = 70;
-const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
+const MOTH_HP = 2;
+const MOTH_R = 9;
+const MOTH_IDLE = 16;
+const MOTH_SEEK = 236;
+const MOTH_SEEK_T = 1.2;
+const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
 const HEART_MAX = 3;
 const HITSTOP = 0.08;
 const IFRAMES = 0.35;
@@ -36,6 +41,7 @@ const NAMES = {
   water: '水洼',
   spark: '焰辙',
   hound: '循辙',
+  moth: '灯蛾',
   hint: '跑过的路两秒后会爆',
 };
 
@@ -63,6 +69,8 @@ const TOAST = {
   dashSafe: '冲能穿过焰辙',
   chain: '连环了',
   loop: '回廊转起来了',
+  moth: '灯蛾倒了',
+  lure: '爆能引开灯蛾',
 };
 
 const COL = {
@@ -237,6 +245,9 @@ function makeState() {
     time: 0,
     taughtDash: false,
     chainToastT: 0,
+    lastBoomX: null,
+    lastBoomY: null,
+    boomSeekT: 0,
   };
 }
 
@@ -288,6 +299,9 @@ function resetRoom(s, index, keepHearts) {
   s.stats.fizzles = 0;
   s.stats.drops = 0;
   s.chainToastT = 0;
+  s.lastBoomX = null;
+  s.lastBoomY = null;
+  s.boomSeekT = 0;
   s.waters = (room.puddles || []).map(function (p) {
     return { x: p.x, y: p.y, w: p.w, h: p.h };
   });
@@ -304,20 +318,23 @@ function resetRoom(s, index, keepHearts) {
   s.enemies = (room.enemies || []).map(function (e) {
     const kind = e.type || e.kind || NAMES.enemy;
     const hound = kind === NAMES.hound;
+    const moth = kind === NAMES.moth;
     return {
       x: e.x, y: e.y,
-      r: hound ? 12 : ENEMY_R,
-      hp: hound ? HOUND_HP : ENEMY_HP,
+      r: moth ? MOTH_R : (hound ? 12 : ENEMY_R),
+      hp: moth ? MOTH_HP : (hound ? HOUND_HP : ENEMY_HP),
       hitT: 0,
       kind: kind,
       faceX: 1,
       faceY: 0,
+      flutter: 0,
     };
   });
   if (room.name === '夜市') toast(s, TOAST.night, 1.1, COL.gold);
   else if (room.name === '循径') toast(s, TOAST.road, 1.1, COL.gold);
   else if (room.name === '双刃') toast(s, TOAST.cut, 1.1, COL.water);
   else if (room.name === '回廊') toast(s, TOAST.loop, 1.3, COL.gold);
+  else if (room.name === '灯巷') toast(s, TOAST.lure, 1.4, COL.gold);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -326,6 +343,33 @@ function resetRoom(s, index, keepHearts) {
 
 function isHound(e) {
   return e.kind === NAMES.hound;
+}
+
+function isMoth(e) {
+  return e.kind === NAMES.moth;
+}
+
+function updateMoth(s, e, dt) {
+  e.flutter = (e.flutter || 0) + dt;
+  let tx = e.x;
+  let ty = e.y;
+  let speed = MOTH_IDLE;
+  if (s.boomSeekT > 0 && s.lastBoomX != null) {
+    tx = s.lastBoomX;
+    ty = s.lastBoomY;
+    speed = MOTH_SEEK;
+  } else {
+    const a = e.flutter * 3.4;
+    tx = e.x + Math.cos(a) * 6;
+    ty = e.y + Math.sin(a) * 5;
+  }
+  const d = dist(e.x, e.y, tx, ty);
+  if (d > 0.5) {
+    e.faceX = (tx - e.x) / d;
+    e.faceY = (ty - e.y) / d;
+    e.x += e.faceX * speed * dt;
+    e.y += e.faceY * speed * dt;
+  }
 }
 
 function liveRoad(s) {
@@ -513,6 +557,9 @@ function hurtPlayer(s, srcX, srcY, why) {
 function explode(s, x, y, hot) {
   const r = hot ? HOT_BLAST_R : BLAST_R;
   s.stats.booms += 1;
+  s.lastBoomX = x;
+  s.lastBoomY = y;
+  s.boomSeekT = MOTH_SEEK_T;
   burst(s, x, y, hot ? 16 : 10, hot ? COL.gold : COL.ember, hot ? 220 : 170);
   addRing(s, x, y, r, hot);
   sfx('boom');
@@ -528,7 +575,7 @@ function explode(s, x, y, hot) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     if (dist(e.x, e.y, x, y) <= r + e.r) {
-      e.hp -= isHound(e) ? 1 : (hot ? 2 : 1);
+      e.hp -= (isHound(e) || isMoth(e)) ? 1 : (hot ? 2 : 1);
       e.hitT = 0.18;
       const d = dist(e.x, e.y, x, y) || 1;
       e.x += ((e.x - x) / d) * 22;
@@ -537,8 +584,8 @@ function explode(s, x, y, hot) {
       punch(s, 6);
       hit = true;
       if (e.hp <= 0) {
-        burst(s, e.x, e.y, 12, COL.ember, 140);
-        toast(s, isHound(e) ? TOAST.hound : TOAST.foe, 1.1, COL.ember);
+        burst(s, e.x, e.y, isMoth(e) ? 10 : 12, isMoth(e) ? COL.gold : COL.ember, 140);
+        toast(s, isMoth(e) ? TOAST.moth : (isHound(e) ? TOAST.hound : TOAST.foe), 1.1, isMoth(e) ? COL.gold : COL.ember);
       }
     }
   }
@@ -645,6 +692,7 @@ function update(s, dt) {
   s.time += dt;
   if (s.toastT > 0) s.toastT -= dt;
   if (s.chainToastT > 0) s.chainToastT -= dt;
+  if (s.boomSeekT > 0) s.boomSeekT -= dt;
   if (s.flash > 0) s.flash -= dt;
   if (s.cam.punch > 0) {
     s.cam.punch *= Math.pow(0.04, dt);
@@ -750,6 +798,7 @@ function update(s, dt) {
     if (e.hp <= 0) continue;
     if (e.hitT > 0) e.hitT -= dt;
     if (isHound(e)) updateHound(s, e, dt);
+    else if (isMoth(e)) updateMoth(s, e, dt);
     else {
       const d = dist(e.x, e.y, p.x, p.y) || 1;
       e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
@@ -977,6 +1026,34 @@ function draw(s, ctx) {
       ctx.fillText(NAMES.hound, e.x, e.y + e.r + 12);
       for (let h = 0; h < HOUND_HP; h++) {
         ctx.fillStyle = h < e.hp ? COL.gold : 'rgba(255,210,74,0.2)';
+        ctx.fillRect(e.x - 9 + h * 10, e.y + e.r + 14, 8, 3);
+      }
+      continue;
+    }
+    if (isMoth(e)) {
+      const flick = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(s.time * 14 + e.x * 0.02));
+      glow(ctx, e.x, e.y, 15, '#fff8dc', 0.16 + 0.28 * flick);
+      glow(ctx, e.x, e.y, 9, COL.gold, 0.22 * flick);
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.rotate(Math.atan2(e.faceY || 0, e.faceX || 1));
+      const flap = Math.sin((s.time + e.flutter) * 16) * 0.28;
+      ctx.fillStyle = flash ? '#ffffff' : 'rgba(255, 244, 210, 0.82)';
+      ctx.beginPath();
+      ctx.ellipse(-5.5, -1.2, 6.4, 3.4 + flap * 1.6, -0.45, 0, Math.PI * 2);
+      ctx.ellipse(5.5, -1.2, 6.4, 3.4 + flap * 1.6, 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.fillStyle = flash ? '#ffffff' : '#fff6d0';
+      ctx.ellipse(0, 0, 3.2, 5.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = '#fff6d0';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.moth, e.x, e.y + e.r + 12);
+      for (let h = 0; h < MOTH_HP; h++) {
+        ctx.fillStyle = h < e.hp ? '#fff6d0' : 'rgba(255,246,208,0.2)';
         ctx.fillRect(e.x - 9 + h * 10, e.y + e.r + 14, 8, 3);
       }
       continue;
@@ -1255,9 +1332,9 @@ function boot() {
 function selfCheck() {
   ensureRooms();
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
-  if (!ROOMS || ROOMS.length !== 9) throw new Error('need 9 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊'];
-  for (let i = 0; i < 9; i++) {
+  if (!ROOMS || ROOMS.length !== 10) throw new Error('need 10 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷'];
+  for (let i = 0; i < 10; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
     }
@@ -1266,6 +1343,7 @@ function selfCheck() {
     }
   }
   if (ROOMS[8].id !== 'huilang') throw new Error('回廊 id');
+  if (ROOMS[9].id !== 'dengxiang') throw new Error('灯巷 id');
 
   const fitJ = roomFit({ roomW: 960, roomH: 140 });
   if (Math.abs(fitJ.scale - 1) > 1e-9) throw new Error('letterbox must not stretch');
@@ -1275,7 +1353,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙', '灯蛾'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -1293,14 +1371,21 @@ function selfCheck() {
     '\u6076\u9b54',
   ];
   if (NAMES.hound !== '循辙') throw new Error('循辙 exists');
+  if (NAMES.moth !== '灯蛾') throw new Error('灯蛾 name');
   let houndN = 0;
+  let mothN = 0;
   for (let r = 0; r < ROOMS.length; r++) {
     const ens = ROOMS[r].enemies || [];
     for (let j = 0; j < ens.length; j++) {
-      if ((ens[j].type || ens[j].kind) === '循辙') houndN += 1;
+      const k = ens[j].type || ens[j].kind;
+      if (k === '循辙') houndN += 1;
+      if (k === '灯蛾') mothN += 1;
     }
   }
   if (houndN < 1) throw new Error('循辙 exists');
+  if (mothN < 1) throw new Error('灯蛾 exists');
+  if (MOTH_SEEK_T !== 1.2) throw new Error('灯蛾 seek 1.2s');
+  if (MOTH_HP !== 2) throw new Error('灯蛾 2 HP');
   const scan = blob + NAMES.hint + '尾火过关失败通关循辙倒了' + want.join('');
   for (let i = 0; i < banned.length; i++) {
     if (scan.indexOf(banned[i]) >= 0) throw new Error('banned');
@@ -1391,10 +1476,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/9') throw new Error('HUD 空场 1/9');
+  if (roomHudText(hud0) !== '空场 · 1/10') throw new Error('HUD 空场 1/10');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/9') throw new Error('HUD 3/9');
+  if (roomHudText(hud2) !== '水巷 · 3/10') throw new Error('HUD 3/10');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -1469,7 +1554,9 @@ function selfCheck() {
   if (!coreBox.open) throw new Error('回廊 dry trail should open 心核');
   last.roomIndex = 8;
   takeCore(last, { x: 100, y: 100 });
-  if (!last.won || last.toast !== TOAST.all) throw new Error('回廊 should 通关');
+  if (last.won) throw new Error('回廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(last, 0.1);
+  if (last.roomName !== '灯巷') throw new Error('core advances to 灯巷');
 
   const mid = makeState();
   resetRoom(mid, 0, false);
@@ -1547,6 +1634,79 @@ function selfCheck() {
   update(wetHit, 0.016);
   if (wetHit.sparks[1].dead) throw new Error('wet spark stays live');
   if (wetHit.sparks[1].t <= CHAIN_T) throw new Error('wet spark not chained');
+
+  const alley = makeState();
+  resetRoom(alley, 9, false);
+  if (alley.roomName !== '灯巷' || alley.roomId !== 'dengxiang') throw new Error('dengxiang load');
+  if (alley.toast !== TOAST.lure) throw new Error('灯巷 intro');
+  if (!alley.waters.length) throw new Error('灯巷 needs 水洼');
+  let alleyMoth = 0;
+  let alleyCore = 0;
+  for (let i = 0; i < alley.enemies.length; i++) {
+    if (isMoth(alley.enemies[i])) alleyMoth += 1;
+  }
+  if (alleyMoth < 2) throw new Error('灯巷 needs 灯蛾');
+  for (let i = 0; i < alley.crates.length; i++) {
+    if (alley.crates[i].loot === 'core') alleyCore += 1;
+  }
+  if (alleyCore !== 1) throw new Error('灯巷 心核');
+  takeCore(alley, { x: 100, y: 100 });
+  if (!alley.won || alley.toast !== TOAST.all) throw new Error('灯巷 should 通关');
+
+  const mothIdle = makeState();
+  resetRoom(mothIdle, 9, false);
+  const mi = mothIdle.enemies.find(function (e) { return isMoth(e); });
+  if (!mi || mi.hp !== 2) throw new Error('灯巷 needs 灯蛾 2hp');
+  mothIdle.player.x = 40;
+  mothIdle.player.y = 40;
+  mothIdle.player.inv = 2;
+  const mix = mi.x;
+  const miy = mi.y;
+  const playerX = mothIdle.player.x;
+  const playerY = mothIdle.player.y;
+  for (let i = 0; i < 20; i++) update(mothIdle, 0.05);
+  const mothIdleD = dist(mi.x, mi.y, mix, miy);
+  const mothToPlayer0 = dist(mix, miy, playerX, playerY);
+  const mothToPlayer1 = dist(mi.x, mi.y, playerX, playerY);
+  if (mothToPlayer0 - mothToPlayer1 > 18) throw new Error('灯蛾 must not seek the player');
+
+  const mothSeek = makeState();
+  resetRoom(mothSeek, 9, false);
+  const mk = mothSeek.enemies.find(function (e) { return isMoth(e); });
+  mothSeek.player.x = 40;
+  mothSeek.player.y = 40;
+  mothSeek.player.inv = 2;
+  mk.x = 220;
+  mk.y = 180;
+  const boomX = 520;
+  const boomY = 180;
+  explode(mothSeek, boomX, boomY, false);
+  if (mothSeek.lastBoomX !== boomX || mothSeek.lastBoomY !== boomY) throw new Error('latest boom stored');
+  if (Math.abs(mothSeek.boomSeekT - MOTH_SEEK_T) > 1e-9) throw new Error('seek 1.2 after boom');
+  const laterX = 220;
+  const laterY = 320;
+  explode(mothSeek, laterX, laterY, false);
+  if (mothSeek.lastBoomX !== laterX || mothSeek.lastBoomY !== laterY) throw new Error('seeks latest boom');
+  const sx0 = mk.x;
+  const sy0 = mk.y;
+  for (let i = 0; i < 16; i++) update(mothSeek, 0.05);
+  const towardLatest = dist(mk.x, mk.y, laterX, laterY);
+  const towardFirst = dist(mk.x, mk.y, boomX, boomY);
+  const towardPlayer = dist(mk.x, mk.y, mothSeek.player.x, mothSeek.player.y);
+  if (dist(mk.x, mk.y, sx0, sy0) < 40) throw new Error('灯蛾 should sprint to boom');
+  if (towardLatest >= dist(sx0, sy0, laterX, laterY) - 8) throw new Error('灯蛾 toward latest boom');
+  if (towardLatest > towardFirst) throw new Error('灯蛾 prefers latest boom not first');
+  if (towardPlayer < dist(sx0, sy0, mothSeek.player.x, mothSeek.player.y) - 8) {
+    throw new Error('灯蛾 sprints to boom not player');
+  }
+
+  const mothHp = makeState();
+  resetRoom(mothHp, 9, false);
+  const mh = mothHp.enemies.find(function (e) { return isMoth(e); });
+  explode(mothHp, mh.x, mh.y, true);
+  if (mh.hp !== 1) throw new Error('灯蛾 any blast is 1');
+  explode(mothHp, mh.x, mh.y, false);
+  if (mh.hp > 0) throw new Error('灯蛾 dies in 2 blasts');
 
   console.log('selfCheck ok', {
     TAIL_T: TAIL_T,
