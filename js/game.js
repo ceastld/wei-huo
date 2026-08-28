@@ -52,6 +52,10 @@ const SPRING_N = 3;
 const SPRING_H = 180;
 const SPRING_GAP = 30;
 const SPRING_DT = 0.14;
+const WAVE_N = 3;
+const WAVE_W = 180;
+const WAVE_GAP = 30;
+const WAVE_DT = 0.14;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -144,6 +148,7 @@ const NAMES = {
   pulse: '脉爆',
   rain: '雨爆',
   spring: '泉爆',
+  wave: '波爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -266,6 +271,9 @@ const TOAST = {
   springGet: '捡到泉爆',
   springUse: '泉喷出来了',
   springRoom: '泉过去清场',
+  waveGet: '捡到波爆',
+  waveUse: '浪拍过去了',
+  waveRoom: '浪过去清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -305,6 +313,7 @@ const COL = {
   pulse: '#c08cff',
   rain: '#5ee0ff',
   spring: '#9dff6a',
+  wave: '#ff8f5a',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -562,6 +571,7 @@ function lootKind(drop) {
   if (drop === '脉爆' || drop === 'pulse') return 'pulse';
   if (drop === '雨爆' || drop === 'rain') return 'rain';
   if (drop === '泉爆' || drop === 'spring') return 'spring';
+  if (drop === '波爆' || drop === 'wave') return 'wave';
   return null;
 }
 
@@ -636,6 +646,7 @@ function makeState() {
     pulseReady: false,
     rainReady: false,
     springReady: false,
+    waveReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -649,6 +660,7 @@ function makeState() {
     pulses: [],
     rains: [],
     springs: [],
+    waves: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -773,6 +785,7 @@ function resetRoom(s, index, keepHearts) {
   s.pulseReady = false;
   s.rainReady = false;
   s.springReady = false;
+  s.waveReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -809,6 +822,8 @@ function resetRoom(s, index, keepHearts) {
   s.rains.length = 0;
   if (!s.springs) s.springs = [];
   s.springs.length = 0;
+  if (!s.waves) s.waves = [];
+  s.waves.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -930,6 +945,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '脉廊') toast(s, TOAST.pulseRoom, 1.4, COL.pulse);
   else if (room.name === '雨廊') toast(s, TOAST.rainRoom, 1.4, COL.rain);
   else if (room.name === '泉廊') toast(s, TOAST.springRoom, 1.4, COL.spring);
+  else if (room.name === '波廊') toast(s, TOAST.waveRoom, 1.4, COL.wave);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -1634,6 +1650,32 @@ function updateSprings(s, dt) {
   }
 }
 
+function updateWaves(s, dt) {
+  if (!s.waves || !s.waves.length) return;
+  const fires = [];
+  for (let i = s.waves.length - 1; i >= 0; i--) {
+    const p = s.waves[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.waves.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 18, p.y + (Math.random() - 0.5) * 6, 1, COL.wave, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.wave, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -1821,6 +1863,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.springReady) {
     s.springReady = false;
     springing = true;
+  }
+  let waving = false;
+  if (!forked && s.waveReady) {
+    s.waveReady = false;
+    waving = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2382,6 +2429,21 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, COL.gold, 160);
     }
   }
+  if (waving) {
+    if (!s.waves) s.waves = [];
+    for (let k = 0; k < WAVE_N; k++) {
+      const d = WAVE_W - WAVE_GAP * k;
+      s.waves.push({ x: x - d, y: y, t: WAVE_DT * (k + 1), ox: x });
+      s.waves.push({ x: x + d, y: y, t: WAVE_DT * (k + 1), ox: x });
+    }
+    toast(s, TOAST.waveUse, 1.1, COL.wave);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.wave, 170);
+      burst(s, x, y, 4, COL.gold, 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -2656,6 +2718,7 @@ function watchSteer(s, dt) {
   let pulseIt = null;
   let rainIt = null;
   let springIt = null;
+  let waveIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -2684,8 +2747,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'pulse') pulseIt = it;
     if (it.kind === 'rain') rainIt = it;
     if (it.kind === 'spring') springIt = it;
+    if (it.kind === 'wave') waveIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt);
 
   let guard = null;
   let gd = 1e9;
@@ -2819,6 +2883,10 @@ function watchSteer(s, dt) {
   } else if (!s.springReady && springIt) {
     tx = springIt.x - p.x;
     ty = springIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.waveReady && waveIt) {
+    tx = waveIt.x - p.x;
+    ty = waveIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3001,6 +3069,7 @@ function update(s, dt) {
     updatePulses(s, dt);
     updateRains(s, dt);
     updateSprings(s, dt);
+    updateWaves(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3024,6 +3093,7 @@ function update(s, dt) {
     updatePulses(s, dt);
     updateRains(s, dt);
     updateSprings(s, dt);
+    updateWaves(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3139,6 +3209,7 @@ function update(s, dt) {
   updatePulses(s, dt);
   updateRains(s, dt);
   updateSprings(s, dt);
+  updateWaves(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -3346,6 +3417,13 @@ function update(s, dt) {
       toast(s, TOAST.springGet, 1.1, COL.spring);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.spring, 130);
+      burst(s, it.x, it.y, 4, COL.gold, 110);
+      punch(s, 3);
+    } else if (it.kind === 'wave') {
+      s.waveReady = true;
+      toast(s, TOAST.waveGet, 1.1, COL.wave);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.wave, 130);
       burst(s, it.x, it.y, 4, COL.gold, 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -4058,6 +4136,21 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.spring, it.x, it.y - 16);
+    } else if (it.kind === 'wave') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.wave, 0.7);
+      glow(ctx, it.x, it.y, 8, COL.gold, 0.35);
+      ctx.fillStyle = COL.wave;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.wave;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.wave, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -4523,6 +4616,37 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('泉', p.x, p.y - 12);
+    }
+  }
+
+  if (s.waves && s.waves.length) {
+    for (let i = 0; i < s.waves.length; i++) {
+      const p = s.waves[i];
+      const maxT = WAVE_DT * WAVE_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const dir = p.x >= ox ? 1 : -1;
+      const x1 = p.x - dir * 36;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, p.y, 18, COL.wave, 0.28);
+      ctx.strokeStyle = COL.wave;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, p.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.wave;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.wave;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('波', p.x, p.y - 12);
     }
   }
 
@@ -5322,6 +5446,27 @@ function draw(s, ctx) {
     ctx.arc(gx, gy, 1.4, 0, Math.PI * 2);
     ctx.fill();
   }
+  if (s.waveReady) {
+    let wx;
+    let wy;
+    if (reducedMotion()) {
+      wx = p.x + 14;
+      wy = p.y - 4;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4;
+      wx = p.x + Math.cos(a) * 16;
+      wy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, wx, wy, 8, COL.wave, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.wave;
+    ctx.arc(wx, wy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = COL.gold;
+    ctx.arc(wx, wy, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -5700,6 +5845,18 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (drumEl && s.springReady && !s.drumReady) {
     drumEl.textContent = NAMES.spring;
   }
+  const waveEl = (typeof document !== 'undefined') ? document.getElementById('wave') : null;
+  if (waveEl) {
+    waveEl.textContent = s.waveReady ? NAMES.wave : '';
+  } else if (springEl && s.waveReady && !s.springReady) {
+    springEl.textContent = NAMES.wave;
+  } else if (rainEl && s.waveReady && !s.rainReady) {
+    rainEl.textContent = NAMES.wave;
+  } else if (pulseEl && s.waveReady && !s.pulseReady) {
+    pulseEl.textContent = NAMES.wave;
+  } else if (drumEl && s.waveReady && !s.drumReady) {
+    drumEl.textContent = NAMES.wave;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -5834,10 +5991,14 @@ function selfCheck() {
   if (SPRING_H !== 180) throw new Error('SPRING_H 180');
   if (SPRING_GAP !== 30) throw new Error('SPRING_GAP 30');
   if (SPRING_DT !== 0.14) throw new Error('SPRING_DT 0.14');
+  if (WAVE_N !== 3) throw new Error('WAVE_N 3');
+  if (WAVE_W !== 180) throw new Error('WAVE_W 180');
+  if (WAVE_GAP !== 30) throw new Error('WAVE_GAP 30');
+  if (WAVE_DT !== 0.14) throw new Error('WAVE_DT 0.14');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 42) throw new Error('need 42 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊'];
+  if (!ROOMS || ROOMS.length !== 43) throw new Error('need 43 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -5911,6 +6072,8 @@ function selfCheck() {
   if (ROOMS[40].name !== '雨廊') throw new Error('room 41 雨廊');
   if (ROOMS[41].id !== 'quanlang') throw new Error('泉廊 id');
   if (ROOMS[41].name !== '泉廊') throw new Error('room 42 泉廊');
+  if (ROOMS[42].id !== 'bolang') throw new Error('波廊 id');
+  if (ROOMS[42].name !== '波廊') throw new Error('room 43 波廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -5942,6 +6105,9 @@ function selfCheck() {
   if (NAMES.spring !== '泉爆') throw new Error('NAMES.spring');
   if (COL.spring !== '#9dff6a') throw new Error('COL.spring');
   if (lootKind('泉爆') !== 'spring' || lootKind('spring') !== 'spring') throw new Error('lootKind 泉爆');
+  if (NAMES.wave !== '波爆') throw new Error('NAMES.wave');
+  if (COL.wave !== '#ff8f5a') throw new Error('COL.wave');
+  if (lootKind('波爆') !== 'wave' || lootKind('wave') !== 'wave') throw new Error('lootKind 波爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -5964,7 +6130,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -7497,6 +7663,8 @@ function selfCheck() {
   if (lootKind('鼓爆') !== 'drum' || lootKind('drum') !== 'drum') throw new Error('lootKind 鼓爆');
   if (lootKind('脉爆') !== 'pulse' || lootKind('pulse') !== 'pulse') throw new Error('lootKind 脉爆');
   if (lootKind('雨爆') !== 'rain' || lootKind('rain') !== 'rain') throw new Error('lootKind 雨爆');
+  if (lootKind('泉爆') !== 'spring' || lootKind('spring') !== 'spring') throw new Error('lootKind 泉爆');
+  if (lootKind('波爆') !== 'wave' || lootKind('wave') !== 'wave') throw new Error('lootKind 波爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -12945,6 +13113,7 @@ function selfCheck() {
   bothP.pulseReady = true;
   bothP.rainReady = true;
   bothP.springReady = true;
+  bothP.waveReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -12954,11 +13123,13 @@ function selfCheck() {
   if (bothP.pulseReady) throw new Error('same boom spends 脉爆');
   if (bothP.rainReady) throw new Error('same boom spends 雨爆');
   if (bothP.springReady) throw new Error('same boom spends 泉爆');
+  if (bothP.waveReady) throw new Error('same boom spends 波爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
   if (!bothP.rains || bothP.rains.length !== RAIN_N) throw new Error('same boom rains');
   if (!bothP.springs || bothP.springs.length !== SPRING_N) throw new Error('same boom springs');
+  if (!bothP.waves || bothP.waves.length !== WAVE_N * 2) throw new Error('same boom waves');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -13555,11 +13726,20 @@ function selfCheck() {
   quan.hitstop = 0;
   updateSpins(quan, SPIN_DT * SPIN_N + 0.05);
   if (quan.springReady !== true) throw new Error('泉廊 spin-orbit does not consume');
+  quan.waveReady = true;
+  explode(quan, 200, 200, false);
+  quan.springReady = true;
+  quan.hitstop = 0;
+  updateWaves(quan, WAVE_DT * WAVE_N + 0.05);
+  if (quan.springReady !== true) throw new Error('泉廊 wave-fork does not consume');
   quan.waters = [];
   explode(quan, quanBox.x + quanBox.w * 0.5, quanBox.y - 20, false);
   if (!quanBox.open) throw new Error('泉廊 dry trail should open 心核');
   takeCore(quan, { x: 100, y: 100 });
-  if (!quan.won || quan.toast !== TOAST.all) throw new Error('泉廊 should 通关');
+  if (quan.won) throw new Error('泉廊 should not 通关');
+  if (quan.toast !== TOAST.core) throw new Error('泉廊 过关');
+  for (let i = 0; i < 20; i++) update(quan, 0.1);
+  if (quan.roomName !== '波廊') throw new Error('core advances to 波廊');
   const hudQuan = makeState();
   resetRoom(hudQuan, 41, false);
   if (roomHudText(hudQuan).indexOf('泉廊 · 42/') !== 0) throw new Error('HUD 泉廊 42/n');
@@ -13574,6 +13754,283 @@ function selfCheck() {
   if (TOAST.springGet !== '捡到泉爆') throw new Error('捡到泉爆');
   if (TOAST.springUse !== '泉喷出来了') throw new Error('泉喷出来了 toast');
   if (TOAST.springRoom !== '泉过去清场') throw new Error('泉过去清场');
+
+  const bo = makeState();
+  resetRoom(bo, 42, false);
+  if (bo.roomName !== '波廊' || bo.roomId !== 'bolang') throw new Error('bolang load');
+  if (bo.toast !== TOAST.waveRoom) throw new Error('波廊 intro');
+  if (bo.roomW !== 960 || bo.roomH !== 400) throw new Error('波廊 size');
+  if (bo.player.x !== 80 || bo.player.y !== 200) throw new Error('波廊 spawn');
+  if (bo.waveReady) throw new Error('波廊 wave starts false');
+  if (!bo.waves || bo.waves.length) throw new Error('波廊 waves start empty');
+  let boStill = 0;
+  let boTide = 0;
+  for (let i = 0; i < bo.waters.length; i++) {
+    if (bo.waters[i].tide) boTide += 1;
+    else boStill += 1;
+  }
+  if (boStill < 1) throw new Error('波廊 needs static 水洼');
+  if (boTide) throw new Error('波廊 no tide');
+  let boCore = 0;
+  let boHeal = 0;
+  let boThick = 0;
+  let boWaveItem = 0;
+  let boSpringItem = 0;
+  let boRainItem = 0;
+  let boPulseItem = 0;
+  let boDrumItem = 0;
+  for (let i = 0; i < bo.crates.length; i++) {
+    if (bo.crates[i].loot === 'core') boCore += 1;
+    if (bo.crates[i].loot === 'heal') boHeal += 1;
+    if (bo.crates[i].thick) boThick += 1;
+  }
+  for (let i = 0; i < bo.items.length; i++) {
+    if (bo.items[i].kind === 'wave') boWaveItem += 1;
+    if (bo.items[i].kind === 'spring') boSpringItem += 1;
+    if (bo.items[i].kind === 'rain') boRainItem += 1;
+    if (bo.items[i].kind === 'pulse') boPulseItem += 1;
+    if (bo.items[i].kind === 'drum') boDrumItem += 1;
+  }
+  if (boWaveItem < 1) throw new Error('波廊 needs 波爆');
+  if (boSpringItem || boRainItem || boPulseItem || boDrumItem) throw new Error('波廊 no extra pickup');
+  if (boCore !== 1) throw new Error('波廊 心核');
+  if (boHeal < 1) throw new Error('波廊 回星');
+  const boBox = bo.crates.find(function (c) { return c.loot === 'core'; });
+  if (!boBox || boBox.thick) throw new Error('波廊 心核 crate is not thick');
+  if (boThick) throw new Error('波廊 no thick crate');
+  let boHound = 0;
+  let boGuard = 0;
+  let boMoth = 0;
+  let boEater = 0;
+  let boShell = 0;
+  let boBoomer = 0;
+  for (let i = 0; i < bo.enemies.length; i++) {
+    if (isHound(bo.enemies[i])) boHound += 1;
+    else if (isMoth(bo.enemies[i])) boMoth += 1;
+    else if (isEater(bo.enemies[i])) boEater += 1;
+    else if (isShell(bo.enemies[i])) boShell += 1;
+    else if (isBoomer(bo.enemies[i])) boBoomer += 1;
+    else boGuard += 1;
+  }
+  if (boGuard !== 3 || boHound !== 0 || boMoth !== 0 || boEater !== 0 || boShell !== 0 || boBoomer !== 0) {
+    throw new Error('波廊 烬卫 only');
+  }
+  if (inWater(bo, 80, 200) || inOil(bo, 80, 200)) throw new Error('波廊 spawn dry');
+  if (inWater(bo, 240, 200) || inOil(bo, 240, 200)) throw new Error('波廊 波爆 dry');
+  if (inWater(bo, 400, 200) || inOil(bo, 400, 200)) throw new Error('波廊 plant dry');
+  if (inOil(bo, 860, 88) || inWater(bo, 860, 88)) throw new Error('波廊 core dry');
+  if (inWater(bo, 520, 200) || inOil(bo, 520, 200)) throw new Error('波廊 烬卫 dry near');
+  if (inWater(bo, 550, 200) || inOil(bo, 550, 200)) throw new Error('波廊 烬卫 dry mid');
+  if (inWater(bo, 580, 200) || inOil(bo, 580, 200)) throw new Error('波廊 烬卫 dry far');
+  if (!inWater(bo, 750, 365)) throw new Error('波廊 wet bag');
+  if (inWater(bo, 400, 50)) throw new Error('波廊 north shelf wet');
+  for (let i = 0; i < bo.crates.length; i++) {
+    const c = bo.crates[i];
+    if (circleRect(bo.player.x, bo.player.y, bo.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('波廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 450; x += 10) {
+    for (let i = 0; i < bo.crates.length; i++) {
+      const c = bo.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('波廊 crate on dry walk');
+      }
+    }
+  }
+  const boNear = bo.enemies.find(function (e) { return Math.abs(e.x - 520) < 1 && Math.abs(e.y - 200) < 1; });
+  const boMid = bo.enemies.find(function (e) { return Math.abs(e.x - 550) < 1 && Math.abs(e.y - 200) < 1; });
+  const boFar = bo.enemies.find(function (e) { return Math.abs(e.x - 580) < 1 && Math.abs(e.y - 200) < 1; });
+  if (!boNear || !boMid || !boFar) throw new Error('波廊 three 烬卫 seats');
+  const boSeats = [boNear, boMid, boFar];
+  for (let i = 0; i < boSeats.length; i++) {
+    const e = boSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('波廊 primary misses 烬卫');
+  }
+  for (let i = 0; i < boSeats.length; i++) {
+    for (let k = 0; k < WAVE_N; k++) {
+      const seatX = 400 + (WAVE_W - WAVE_GAP * k);
+      if (dist(boSeats[i].x, boSeats[i].y, seatX, 200) > HOT_BLAST_R + (boSeats[i].r || ENEMY_R)) {
+        throw new Error('波廊 hot wave reaches 烬卫');
+      }
+    }
+  }
+  const boCoreCx = boBox.x + boBox.w * 0.5;
+  const boCoreCy = boBox.y + boBox.h * 0.5;
+  if (!(dist(boCoreCx, boCoreCy, 400, 200) > HOT_BLAST_R)) throw new Error('波廊 core outside plant blast');
+  bo.player.x = 80;
+  bo.player.y = 80;
+  bo.player.hearts = 3;
+  bo.player.inv = 2;
+  bo.hitstop = 0;
+  bo.embers.length = 0;
+  const boGround = bo.items.find(function (it) { return it.kind === 'wave' && !it.taken; });
+  if (!boGround) throw new Error('波廊 ground 波爆 present');
+  bo.player.x = boGround.x;
+  bo.player.y = 200;
+  update(bo, 0.016);
+  if (bo.waveReady !== true) throw new Error('pick wave → waveReady');
+  if (bo.toast !== TOAST.waveGet) throw new Error('捡到波爆 room');
+  bo.player.x = 80;
+  bo.player.y = 80;
+  bo.player.inv = 2;
+  bo.hitstop = 0;
+  bo.embers.length = 0;
+  const boHpNear = boNear.hp;
+  const boHpMid = boMid.hp;
+  const boHpFar = boFar.hp;
+  explode(bo, 400, 200, false);
+  if (bo.waveReady) throw new Error('波廊 wave spends');
+  if (bo.toast !== TOAST.waveUse) throw new Error('浪拍过去了 room');
+  if (!bo.waves || bo.waves.length !== WAVE_N * 2) throw new Error('波廊 waves queued');
+  if (Math.abs(bo.waves[0].x - 220) > 1e-6 || Math.abs(bo.waves[0].y - 200) > 1e-6) throw new Error('波廊 wave far L');
+  if (Math.abs(bo.waves[1].x - 580) > 1e-6 || Math.abs(bo.waves[1].y - 200) > 1e-6) throw new Error('波廊 wave far R');
+  if (Math.abs(bo.waves[2].x - 250) > 1e-6 || Math.abs(bo.waves[2].y - 200) > 1e-6) throw new Error('波廊 wave mid L');
+  if (Math.abs(bo.waves[3].x - 550) > 1e-6 || Math.abs(bo.waves[3].y - 200) > 1e-6) throw new Error('波廊 wave mid R');
+  if (Math.abs(bo.waves[4].x - 280) > 1e-6 || Math.abs(bo.waves[4].y - 200) > 1e-6) throw new Error('波廊 wave near L');
+  if (Math.abs(bo.waves[5].x - 520) > 1e-6 || Math.abs(bo.waves[5].y - 200) > 1e-6) throw new Error('波廊 wave near R');
+  if (Math.abs(bo.waves[0].t - WAVE_DT) > 1e-6) throw new Error('波廊 dt 1');
+  if (Math.abs(bo.waves[2].t - WAVE_DT * 2) > 1e-6) throw new Error('波廊 dt 2');
+  if (Math.abs(bo.waves[4].t - WAVE_DT * 3) > 1e-6) throw new Error('波廊 dt 3');
+  if (boNear.hp !== boHpNear || boMid.hp !== boHpMid || boFar.hp !== boHpFar) throw new Error('波廊 primary misses');
+  bo.hitstop = 0;
+  updateWaves(bo, WAVE_DT + 0.01);
+  if (bo.waves.length !== 4) throw new Error('波廊 first wave');
+  if (!(boNear.hp === boHpNear - 2 || boNear.hp <= 0)) throw new Error('波廊 wave dmg near');
+  if (!(boMid.hp === boHpMid - 2 || boMid.hp <= 0)) throw new Error('波廊 wave dmg mid');
+  if (!(boFar.hp === boHpFar - 2 || boFar.hp <= 0)) throw new Error('波廊 wave dmg far');
+  boNear.x = 520;
+  boNear.y = 200;
+  boMid.x = 550;
+  boMid.y = 200;
+  boFar.x = 580;
+  boFar.y = 200;
+  bo.hitstop = 0;
+  updateWaves(bo, WAVE_DT + 0.01);
+  if (bo.waves.length !== 2) throw new Error('波廊 second wave');
+  boNear.x = 520;
+  boNear.y = 200;
+  boMid.x = 550;
+  boMid.y = 200;
+  boFar.x = 580;
+  boFar.y = 200;
+  bo.hitstop = 0;
+  updateWaves(bo, WAVE_DT + 0.01);
+  if (bo.waves.length !== 0) throw new Error('波廊 waves finish');
+  if (boNear.hp > 0 || boMid.hp > 0 || boFar.hp > 0) throw new Error('波廊 three waves kill');
+  bo.waveReady = true;
+  dropSpark(bo, 300, 80, false);
+  if (bo.waveReady !== true) throw new Error('dropSpark keeps 波爆');
+  bo.input.dash = true;
+  bo.player.dashT = 0;
+  bo.player.dashCd = 0;
+  bo.hitstop = 0;
+  update(bo, 0.016);
+  if (bo.waveReady !== true) throw new Error('dash does not consume 波爆');
+  const waveSelf = makeState();
+  resetRoom(waveSelf, 0, false);
+  waveSelf.waveReady = true;
+  waveSelf.player.x = 580;
+  waveSelf.player.y = 200;
+  waveSelf.player.inv = 0;
+  waveSelf.player.hearts = 3;
+  explode(waveSelf, 400, 200, false);
+  if (waveSelf.player.hearts !== 3) throw new Error('primary dry misses player for wave');
+  waveSelf.hitstop = 0;
+  updateWaves(waveSelf, WAVE_DT + 0.01);
+  if (waveSelf.player.hearts !== 2) throw new Error('own wave hurts player');
+  waveSelf.player.hearts = 3;
+  waveSelf.player.inv = 0;
+  waveSelf.player.dashT = DASH_TIME;
+  waveSelf.waves = [{ x: 580, y: 200, t: 0 }];
+  waveSelf.hitstop = 0;
+  updateWaves(waveSelf, 0.02);
+  if (waveSelf.player.hearts !== 3) throw new Error('dash i-frames skip wave');
+  bo.waveReady = true;
+  bo.sparks.length = 0;
+  if (bo.waves) bo.waves.length = 0;
+  bo.player.x = 80;
+  bo.player.y = 80;
+  bo.player.dashT = 0;
+  bo.player.dashCd = 0;
+  bo.player.vx = 0;
+  bo.player.vy = 0;
+  bo.player.inv = 2;
+  bo.input.x = 0;
+  bo.input.y = 0;
+  bo.input.dash = false;
+  bo.hitstop = 0;
+  bo.waters = [{ x: 80, y: 80, w: 80, h: 80 }];
+  dropSpark(bo, 120, 120, false);
+  if (!bo.sparks[bo.sparks.length - 1].wet) throw new Error('波廊 wet spark');
+  const boBooms = bo.stats.booms;
+  for (let i = 0; i < 24; i++) update(bo, 0.1);
+  if (bo.waveReady !== true) throw new Error('波廊 wet fizzle does not consume');
+  if (bo.stats.booms !== boBooms) throw new Error('波廊 wet no extra boom');
+  bo.waters = [];
+  explode(bo, 200, 200, false, false, false, { fork: true });
+  if (bo.waveReady !== true) throw new Error('波廊 fork does not consume');
+  bo.echoReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  for (let i = 0; i < 12; i++) update(bo, 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 echo does not consume');
+  bo.fanReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updateFans(bo, FAN_DT * FAN_N + 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 fan-fork does not consume');
+  bo.drumReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updateDrums(bo, 0.55);
+  if (bo.waveReady !== true) throw new Error('波廊 drum-wave does not consume');
+  bo.pulseReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updatePulses(bo, PULSE_DT * PULSE_N + 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 pulse-aftershock does not consume');
+  bo.rainReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updateRains(bo, RAIN_DT * RAIN_N + 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 rain-drop does not consume');
+  bo.springReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updateSprings(bo, SPRING_DT * SPRING_N + 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 spring-jet does not consume');
+  bo.spinReady = true;
+  explode(bo, 200, 200, false);
+  bo.waveReady = true;
+  bo.hitstop = 0;
+  updateSpins(bo, SPIN_DT * SPIN_N + 0.05);
+  if (bo.waveReady !== true) throw new Error('波廊 spin-orbit does not consume');
+  bo.waters = [];
+  explode(bo, boBox.x + boBox.w * 0.5, boBox.y - 20, false);
+  if (!boBox.open) throw new Error('波廊 dry trail should open 心核');
+  takeCore(bo, { x: 100, y: 100 });
+  if (!bo.won || bo.toast !== TOAST.all) throw new Error('波廊 should 通关');
+  const hudBo = makeState();
+  resetRoom(hudBo, 42, false);
+  if (roomHudText(hudBo).indexOf('波廊 · 43/') !== 0) throw new Error('HUD 波廊 43/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (WAVE_N !== 3) throw new Error('WAVE_N 3');
+  if (WAVE_W !== 180) throw new Error('WAVE_W 180');
+  if (WAVE_GAP !== 30) throw new Error('WAVE_GAP 30');
+  if (WAVE_DT !== 0.14) throw new Error('WAVE_DT 0.14');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.waveGet !== '捡到波爆') throw new Error('捡到波爆');
+  if (TOAST.waveUse !== '浪拍过去了') throw new Error('浪拍过去了 toast');
+  if (TOAST.waveRoom !== '浪过去清场') throw new Error('浪过去清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
