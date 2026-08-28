@@ -76,25 +76,45 @@ html, body {
   opacity: 0.7;
 }
 
+.room {
+  margin-top: 2px;
+  font-size: 13px;
+  letter-spacing: 0.28em;
+  color: var(--ember);
+}
+
 .overlay {
   pointer-events: none;
   position: absolute;
   inset: 0;
   z-index: 5;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  padding-top: 76px;
 }
 
 .toast {
-  padding: 12px 28px;
+  padding: 8px 20px;
   border: 1px solid rgba(255, 210, 74, 0.45);
   background: rgba(20, 8, 10, 0.72);
   color: var(--gold);
-  font-size: clamp(28px, 6vw, 52px);
-  letter-spacing: 0.2em;
+  font-size: clamp(16px, 3.2vw, 28px);
+  letter-spacing: 0.16em;
   text-shadow: 0 0 22px rgba(255, 106, 26, 0.7);
 }
+
+.toast.big {
+  margin-top: 16vh;
+  padding: 12px 28px;
+  font-size: clamp(28px, 6vw, 52px);
+  letter-spacing: 0.2em;
+}
+
+.toast.heart { color: var(--heart); border-color: rgba(255, 93, 143, 0.5); }
+.toast.water { color: #8ec6e6; border-color: rgba(142, 198, 230, 0.45); }
+.toast.core { color: var(--core); border-color: rgba(255, 93, 143, 0.55); }
+.toast.gold { color: var(--gold); }
 
 .toast[hidden] { display: none; }
 

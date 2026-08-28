@@ -1,145 +1,74 @@
-/* 尾火 · 音效。纯 WebAudio，无 CDN。首次手势才 resume。 */
-(function (global) {
-  "use strict";
+'use strict';
 
-  var ctx = null;
-  var armed = false;
+const AudioFx = (() => {
+  let ctx = null;
 
-  function AudioCtor() {
-    return global.AudioContext || global.webkitAudioContext;
-  }
-
-  function getCtx() {
-    var AC = AudioCtor();
+  function ac() {
+    if (typeof window === 'undefined') return null;
+    const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
     if (!ctx) ctx = new AC();
-    if (ctx.state === "suspended") {
-      var p = ctx.resume();
-      if (p && p.catch) p.catch(function () {});
-    }
+    if (ctx.state === 'suspended') ctx.resume();
     return ctx;
   }
 
-  function onFirstGesture() {
-    getCtx();
-  }
-
-  function arm() {
-    if (armed) return;
-    armed = true;
-    global.addEventListener("pointerdown", onFirstGesture, { once: true, passive: true });
-    global.addEventListener("keydown", onFirstGesture, { once: true });
-    global.addEventListener("touchstart", onFirstGesture, { once: true, passive: true });
-  }
-
-  function envGain(c, peak, dur, t) {
-    var g = c.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  function beep(freq, dur, type, vol, slide) {
+    const c = ac();
+    if (!c) return;
+    const t0 = c.currentTime;
+    const osc = c.createOscillator();
+    const g = c.createGain();
+    osc.type = type || 'square';
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t0 + dur);
+    g.gain.setValueAtTime(vol || 0.06, t0);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+    osc.connect(g);
     g.connect(c.destination);
-    return g;
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
   }
 
-  function tone(freq, dur, type, peak, when, slide) {
-    var c = getCtx();
+  function noise(dur, vol, hp) {
+    const c = ac();
     if (!c) return;
-    var t = when == null ? c.currentTime : when;
-    var osc = c.createOscillator();
-    osc.type = type || "square";
-    osc.frequency.setValueAtTime(freq, t);
-    if (slide != null) {
-      osc.frequency.exponentialRampToValueAtTime(Math.max(20, slide), t + dur);
-    }
-    osc.connect(envGain(c, peak, dur, t));
-    osc.start(t);
-    osc.stop(t + dur + 0.03);
-  }
-
-  function noise(dur, peak, when, cutoff) {
-    var c = getCtx();
-    if (!c) return;
-    var t = when == null ? c.currentTime : when;
-    var n = Math.max(1, (c.sampleRate * dur) | 0);
-    var buf = c.createBuffer(1, n, c.sampleRate);
-    var data = buf.getChannelData(0);
-    for (var i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
-    var src = c.createBufferSource();
+    const n = Math.max(1, Math.floor(c.sampleRate * dur));
+    const buf = c.createBuffer(1, n, c.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = c.createBufferSource();
     src.buffer = buf;
-    var filt = c.createBiquadFilter();
-    filt.type = "lowpass";
-    filt.frequency.setValueAtTime(cutoff || 1800, t);
-    var g = envGain(c, peak, dur, t);
-    src.connect(filt);
-    filt.connect(g);
-    src.start(t);
-    src.stop(t + dur + 0.03);
+    const f = c.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = hp || 900;
+    const g = c.createGain();
+    g.gain.value = vol || 0.08;
+    src.connect(f);
+    f.connect(g);
+    g.connect(c.destination);
+    src.start();
   }
 
-  function beep() {
-    tone(880, 0.07, "square", 0.08);
-  }
-
-  function explode() {
-    var c = getCtx();
-    if (!c) return;
-    var t = c.currentTime;
-    noise(0.22, 0.28, t, 2400);
-    tone(180, 0.18, "sawtooth", 0.16, t, 55);
-    tone(420, 0.08, "square", 0.06, t);
-  }
-
-  function dash() {
-    var c = getCtx();
-    if (!c) return;
-    var t = c.currentTime;
-    tone(220, 0.12, "sawtooth", 0.1, t, 620);
-    noise(0.08, 0.08, t, 3200);
-  }
-
-  function hurt() {
-    var c = getCtx();
-    if (!c) return;
-    var t = c.currentTime;
-    tone(140, 0.22, "square", 0.14, t, 60);
-    noise(0.12, 0.1, t, 800);
-  }
-
-  function win() {
-    var c = getCtx();
-    if (!c) return;
-    var t = c.currentTime;
-    tone(523, 0.12, "triangle", 0.1, t);
-    tone(659, 0.12, "triangle", 0.1, t + 0.1);
-    tone(784, 0.18, "triangle", 0.12, t + 0.2);
-    tone(1046, 0.28, "sine", 0.1, t + 0.32);
-  }
-
-  function pickup() {
-    var c = getCtx();
-    if (!c) return;
-    var t = c.currentTime;
-    tone(660, 0.08, "triangle", 0.09, t);
-    tone(990, 0.12, "sine", 0.08, t + 0.06);
-  }
-
-  function fizzle() {
-    var c = getCtx();
-    if (!c) return;
-    var t = c.currentTime;
-    noise(0.2, 0.07, t, 900);
-    tone(320, 0.16, "sine", 0.05, t, 90);
-  }
-
-  arm();
-
-  global.WeiHuoAudio = {
-    beep: beep,
-    explode: explode,
-    dash: dash,
-    hurt: hurt,
-    win: win,
-    pickup: pickup,
-    fizzle: fizzle
+  const api = {
+    unlock() { ac(); },
+    beep() { beep(660, 0.05, 'square', 0.04); },
+    dash() { beep(420, 0.08, 'sawtooth', 0.05, 180); },
+    explode() { noise(0.16, 0.1, 700); beep(140, 0.12, 'triangle', 0.07, 60); },
+    fizzle() { beep(720, 0.07, 'sine', 0.035, 220); },
+    hurt() { beep(220, 0.16, 'square', 0.07, 80); },
+    pickup() { beep(520, 0.1, 'sine', 0.05, 780); },
+    win() { beep(440, 0.1, 'sine', 0.06); setTimeout(() => beep(660, 0.18, 'sine', 0.06), 90); },
   };
-})(typeof window !== "undefined" ? window : this);
+  api.boom = function () { api.explode(); };
+  api.heal = function () { api.pickup(); };
+  api.open = function () { api.beep(); };
+  return api;
+})();
+
+if (typeof window !== 'undefined') {
+  window.AudioFx = AudioFx;
+  window.WeiHuoAudio = AudioFx;
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = AudioFx;
+}

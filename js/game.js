@@ -1,880 +1,1146 @@
-/* 尾火 v0 · 一房可玩。无 CDN。 SHIP-FRESH */
-(function (root) {
-  "use strict";
+'use strict';
 
-  var TAIL_T = 2.0;
-  var SPARK_GAP = 18;
-  var BLAST_R = 36;
-  var BLAST_R_HOT = 50;
-  var MAX_HEART = 3;
-  var HITSTOP_MS = 80;
-  var CAM_PUNCH = 6;
-  var NAMES = ["焰辙", "烬卫", "箱", "水洼", "心核", "回星"];
+const TAIL_T = 2.0;
+const SPARK_GAP = 18;
+const BLAST_R = 40;
+const HOT_BLAST_R = 68;
+const PLAYER_R = 11;
+const PLAYER_SPEED = 178;
+const DASH_SPEED = 520;
+const DASH_TIME = 0.13;
+const DASH_CD = 0.42;
+const ENEMY_R = 13;
+const ENEMY_SPEED = 48;
+const ENEMY_HP = 3;
+const HEART_MAX = 3;
+const HITSTOP = 0.08;
+const IFRAMES = 0.95;
+const CRATE_S = 40;
 
-  function blastRadius(hot) {
-    return hot ? BLAST_R_HOT : BLAST_R;
-  }
+const NAMES = {
+  title: '尾火',
+  enemy: '烬卫',
+  crate: '箱',
+  core: '心核',
+  heal: '回星',
+  water: '水洼',
+  spark: '焰辙',
+  hint: '跑过的路两秒后会爆',
+};
 
-  function hypot(ax, ay) {
-    return Math.sqrt(ax * ax + ay * ay);
-  }
+const COL = {
+  bg: '#14080a',
+  ember: '#ff6a1a',
+  gold: '#ffd24a',
+  water: '#3a6b8c',
+  core: '#ff5d8f',
+  ash: '#6b5344',
+  heart: '#ff5d8f',
+};
 
-  function sparkDropsForPath(pts, gap) {
-    gap = gap == null ? SPARK_GAP : gap;
-    var n = 0;
-    var acc = 0;
-    var i, dx, dy, d;
-    for (i = 1; i < pts.length; i++) {
-      dx = pts[i].x - pts[i - 1].x;
-      dy = pts[i].y - pts[i - 1].y;
-      d = hypot(dx, dy);
-      if (d < 1e-6) {
-        acc = 0;
-        continue;
-      }
-      acc += d;
-      while (acc >= gap) {
-        n += 1;
-        acc -= gap;
-      }
-    }
-    return n;
-  }
+const ROOM_NAMES = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市'];
 
-  function inPuddle(x, y, puddles) {
-    var i, p;
-    for (i = 0; i < puddles.length; i++) {
-      p = puddles[i];
-      if (hypot(x - p.x, y - p.y) < p.r) return true;
-    }
+let ROOM_PACK = null;
+
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+function dist(ax, ay, bx, by) { return Math.hypot(bx - ax, by - ay); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function prefersReduce() {
+  try {
+    return !!(typeof window !== 'undefined' && window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (err) {
     return false;
   }
+}
 
-  function selfCheck() {
-    if (TAIL_T !== 2) throw new Error("TAIL_T must be 2");
-    var stand = [];
-    var i;
-    for (i = 0; i < 48; i++) stand.push({ x: 40, y: 40 });
-    if (sparkDropsForPath(stand) !== 0) throw new Error("standing must drop 0");
-    var walk = [{ x: 0, y: 0 }, { x: SPARK_GAP * 5, y: 0 }];
-    if (sparkDropsForPath(walk) < 4) throw new Error("moving should drop sparks");
-    if (blastRadius(false) !== 36) throw new Error("blast r");
-    if (blastRadius(true) !== 50) throw new Error("dash blast r");
-    var puddles = [{ x: 0, y: 0, r: 20 }];
-    if (!inPuddle(4, 0, puddles) || inPuddle(80, 0, puddles)) {
-      throw new Error("puddle test");
-    }
-    var src;
-    try {
-      src = require("fs").readFileSync(__filename, "utf8");
-    } catch (e) {
-      src = NAMES.join("");
-    }
-    for (i = 0; i < NAMES.length; i++) {
-      if (src.indexOf(NAMES[i]) < 0) throw new Error("missing name " + NAMES[i]);
-    }
-    var banned = ["\u4f20\u9001", "\u98de\u884c", "\u4e09\u53c9\u621f", "\u6fc0\u6012", "\u5929\u4f7f", "\u6076\u9b54"];
-    for (i = 0; i < banned.length; i++) {
-      if (src.indexOf(banned[i]) >= 0) throw new Error("banned " + banned[i]);
-    }
-    if (typeof console !== "undefined" && console.log) console.log("selfCheck ok");
+function audioApi() {
+  if (typeof window !== 'undefined' && window.WeiHuoAudio) return window.WeiHuoAudio;
+  if (typeof WeiHuoAudio !== 'undefined') return WeiHuoAudio;
+  if (typeof window !== 'undefined' && window.AudioFx) return window.AudioFx;
+  if (typeof AudioFx !== 'undefined') return AudioFx;
+  return null;
+}
+
+function unlockAudio() {
+  const api = audioApi();
+  if (api && typeof api.unlock === 'function') api.unlock();
+}
+
+function sfx(name) {
+  const api = audioApi();
+  if (!api) return;
+  const alias = { boom: 'explode', heal: 'pickup', open: 'beep' };
+  const key = alias[name] || name;
+  if (typeof api[key] === 'function') api[key]();
+  else if (typeof api[name] === 'function') api[name]();
+}
+
+function circleRect(cx, cy, cr, rx, ry, rw, rh) {
+  const nx = clamp(cx, rx, rx + rw);
+  const ny = clamp(cy, ry, ry + rh);
+  return dist(cx, cy, nx, ny) <= cr;
+}
+
+function inWater(s, x, y) {
+  for (let i = 0; i < s.waters.length; i++) {
+    const w = s.waters[i];
+    if (x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h) return true;
+  }
+  return false;
+}
+
+function separateCircleRect(ent, rx, ry, rw, rh) {
+  const nx = clamp(ent.x, rx, rx + rw);
+  const ny = clamp(ent.y, ry, ry + rh);
+  let dx = ent.x - nx;
+  let dy = ent.y - ny;
+  let d = Math.hypot(dx, dy);
+  if (d < 1e-4) {
+    const left = ent.x - rx;
+    const right = rx + rw - ent.x;
+    const top = ent.y - ry;
+    const bot = ry + rh - ent.y;
+    const m = Math.min(left, right, top, bot);
+    if (m === left) ent.x = rx - ent.r;
+    else if (m === right) ent.x = rx + rw + ent.r;
+    else if (m === top) ent.y = ry - ent.r;
+    else ent.y = ry + rh + ent.r;
     return true;
   }
+  if (d < ent.r) {
+    const pen = ent.r - d;
+    ent.x += (dx / d) * pen;
+    ent.y += (dy / d) * pen;
+    return true;
+  }
+  return false;
+}
 
-  if (typeof document === "undefined") {
-    selfCheck();
-    if (typeof process !== "undefined" && process.exit) process.exit(0);
+function blockCrates(s, ent) {
+  for (let i = 0; i < s.crates.length; i++) {
+    const c = s.crates[i];
+    if (c.open) continue;
+    separateCircleRect(ent, c.x, c.y, c.w, c.h);
+  }
+}
+
+function makeState() {
+  return {
+    roomIndex: 0,
+    room: null,
+    roomW: 720,
+    roomH: 480,
+    player: {
+      x: 96, y: 240, r: PLAYER_R,
+      vx: 0, vy: 0, faceX: 1, faceY: 0,
+      dashT: 0, dashCd: 0, inv: 0, hearts: HEART_MAX,
+      squash: 0,
+    },
+    lastSparkX: 96,
+    lastSparkY: 240,
+    sparks: [],
+    enemies: [],
+    crates: [],
+    waters: [],
+    items: [],
+    parts: [],
+    swells: [],
+    input: { x: 0, y: 0, dash: false },
+    cam: { x: 0, y: 0, punch: 0, dx: 1, dy: 0 },
+    hitstop: 0,
+    flash: 0,
+    won: false,
+    dead: false,
+    cleared: false,
+    advanceT: 0,
+    toast: '',
+    toastT: 0,
+    toastTone: 'gold',
+    stats: { booms: 0, fizzles: 0, drops: 0 },
+    time: 0,
+    reduce: prefersReduce(),
+  };
+}
+
+function lootKind(drop) {
+  if (drop === '心核' || drop === 'core') return 'core';
+  if (drop === '回星' || drop === 'heal') return 'heal';
+  return null;
+}
+
+function applyRoom(s, index) {
+  const rooms = ROOM_PACK.rooms;
+  const i = ((index % rooms.length) + rooms.length) % rooms.length;
+  const room = rooms[i];
+  const crateS = (ROOM_PACK.defaults && ROOM_PACK.defaults.crate) || CRATE_S;
+  s.roomIndex = i;
+  s.room = room;
+  s.roomW = room.size.w;
+  s.roomH = room.size.h;
+  s.player.x = room.player.x;
+  s.player.y = room.player.y;
+  s.player.r = PLAYER_R;
+  s.player.vx = 0;
+  s.player.vy = 0;
+  s.player.faceX = 1;
+  s.player.faceY = 0;
+  s.player.dashT = 0;
+  s.player.dashCd = 0;
+  s.player.inv = 0;
+  s.player.hearts = HEART_MAX;
+  s.player.squash = 0;
+  s.lastSparkX = s.player.x;
+  s.lastSparkY = s.player.y;
+  s.sparks.length = 0;
+  s.items.length = 0;
+  s.parts.length = 0;
+  s.swells.length = 0;
+  s.won = false;
+  s.dead = false;
+  s.cleared = false;
+  s.advanceT = 0;
+  s.toast = '';
+  s.toastT = 0;
+  s.toastTone = 'gold';
+  s.hitstop = 0;
+  s.flash = 0;
+  s.cam.x = 0;
+  s.cam.y = 0;
+  s.cam.punch = 0;
+  s.time = 0;
+  s.stats.booms = 0;
+  s.stats.fizzles = 0;
+  s.stats.drops = 0;
+  s.waters = (room.puddles || []).map((p) => ({ x: p.x, y: p.y, w: p.w, h: p.h }));
+  s.crates = (room.crates || []).map((c) => ({
+    x: c.x - crateS * 0.5,
+    y: c.y - crateS * 0.5,
+    w: crateS,
+    h: crateS,
+    open: false,
+    loot: lootKind(c.drop),
+  }));
+  s.enemies = (room.enemies || []).map((e) => ({
+    x: e.x,
+    y: e.y,
+    r: ENEMY_R,
+    hp: ENEMY_HP,
+    hitT: 0,
+  }));
+  if (room.name === '夜市') toast(s, '夜市还亮着', 'gold');
+}
+
+function resetRoom(s) {
+  applyRoom(s, s.roomIndex || 0);
+}
+
+function dropSpark(s, x, y, hot) {
+  const wet = inWater(s, x, y);
+  s.sparks.push({ x, y, t: TAIL_T, hot: !!hot, wet, dead: false });
+  s.stats.drops += 1;
+  return s.sparks[s.sparks.length - 1];
+}
+
+function layTrail(s, fromX, fromY, toX, toY, hot) {
+  let x = s.lastSparkX;
+  let y = s.lastSparkY;
+  const dx = toX - x;
+  const dy = toY - y;
+  const d = Math.hypot(dx, dy);
+  if (d < SPARK_GAP) return;
+  const n = Math.floor(d / SPARK_GAP);
+  for (let i = 1; i <= n; i++) {
+    const t = (i * SPARK_GAP) / d;
+    dropSpark(s, x + dx * t, y + dy * t, hot);
+    s.lastSparkX = x + dx * t;
+    s.lastSparkY = y + dy * t;
+  }
+}
+
+function burst(s, x, y, n, color, speed, life, lift) {
+  if (s.reduce) n = Math.max(2, Math.floor(n * 0.5));
+  const life0 = life || 0.28;
+  for (let i = 0; i < n; i++) {
+    const a = (Math.PI * 2 * i) / n + Math.random() * 0.4;
+    const sp = speed * (0.55 + Math.random() * 0.7);
+    s.parts.push({
+      x, y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp + (lift ? -40 : 0),
+      t: life0 * (0.75 + Math.random() * 0.45),
+      max: life0,
+      r: 2 + Math.random() * 3,
+      color,
+      lift: !!lift,
+    });
+  }
+}
+
+function spawnSwell(s, x, y, baseR, hot, dual) {
+  s.swells.push({ x, y, t: 0, baseR, hot: !!hot, dual: !!dual });
+}
+
+function punch(s, amt, dirX, dirY) {
+  if (s.reduce) return;
+  s.cam.punch = Math.max(s.cam.punch, amt);
+  if (dirX != null && dirY != null) {
+    const d = Math.hypot(dirX, dirY) || 1;
+    s.cam.dx = dirX / d;
+    s.cam.dy = dirY / d;
+  }
+}
+
+function toast(s, text, tone, hold) {
+  s.toast = text;
+  s.toastT = hold != null ? hold : 1.1;
+  s.toastTone = tone || 'gold';
+}
+
+function hitstopFor(s, sec) {
+  const amt = s.reduce ? 0.02 : sec;
+  s.hitstop = Math.max(s.hitstop, amt);
+}
+
+function hurtPlayer(s, srcX, srcY, reason) {
+  const p = s.player;
+  if (s.won || s.dead || p.inv > 0) return false;
+  p.hearts -= 1;
+  p.inv = IFRAMES;
+  p.squash = 0.14;
+  s.flash = 0.22;
+  hitstopFor(s, HITSTOP);
+  punch(s, 6, p.x - (srcX != null ? srcX : p.x), p.y - (srcY != null ? srcY : p.y - 1));
+  burst(s, p.x, p.y, 6, COL.heart, 90, 0.2);
+  if (srcX != null) {
+    const d = dist(p.x, p.y, srcX, srcY) || 1;
+    p.x += ((p.x - srcX) / d) * 18;
+    p.y += ((p.y - srcY) / d) * 18;
+  }
+  sfx('hurt');
+  if (p.hearts <= 0) {
+    p.hearts = 0;
+    s.dead = true;
+    toast(s, '心空了', 'heart', 99);
+  } else {
+    toast(s, reason || '别踩自己的尾', 'heart');
+  }
+  return true;
+}
+
+function explode(s, x, y, hot) {
+  const r = hot ? HOT_BLAST_R : BLAST_R;
+  s.stats.booms += 1;
+  burst(s, x, y, hot ? 16 : 10, hot ? COL.gold : COL.ember, hot ? 220 : 170, hot ? 0.36 : 0.28);
+  burst(s, x, y, hot ? 8 : 6, COL.gold, 100, 0.4);
+  spawnSwell(s, x, y, r, hot, false);
+  sfx('explode');
+
+  let hit = false;
+  let notable = false;
+  const p = s.player;
+  if (!s.won && !s.dead && dist(p.x, p.y, x, y) <= r + p.r) {
+    hit = true;
+    hurtPlayer(s, x, y, '别踩自己的尾');
+  }
+
+  for (let i = 0; i < s.enemies.length; i++) {
+    const e = s.enemies[i];
+    if (e.hp <= 0) continue;
+    if (dist(e.x, e.y, x, y) <= r + e.r) {
+      hit = true;
+      e.hp -= hot ? 2 : 1;
+      e.hitT = 0.18;
+      const d = dist(e.x, e.y, x, y) || 1;
+      e.x += ((e.x - x) / d) * 22;
+      e.y += ((e.y - y) / d) * 22;
+      if (e.hp <= 0) {
+        burst(s, e.x, e.y, 12, COL.ember, 150, 0.32);
+        burst(s, e.x, e.y, 6, COL.ash, 80, 0.28);
+        toast(s, '烬卫倒了', 'gold');
+        notable = true;
+      }
+    }
+  }
+
+  for (let i = 0; i < s.crates.length; i++) {
+    const c = s.crates[i];
+    if (c.open) continue;
+    if (circleRect(x, y, r, c.x, c.y, c.w, c.h)) {
+      hit = true;
+      c.open = true;
+      sfx('beep');
+      burst(s, c.x + c.w * 0.5, c.y + c.h * 0.5, 8, COL.gold, 120, 0.24);
+      burst(s, c.x + c.w * 0.5, c.y + c.h * 0.5, 4, COL.ash, 70, 0.2);
+      toast(s, '箱开了', 'gold');
+      notable = true;
+      if (c.loot) {
+        s.items.push({
+          kind: c.loot,
+          x: c.x + c.w * 0.5,
+          y: c.y + c.h * 0.5,
+          r: 10,
+          taken: false,
+        });
+      }
+    }
+  }
+
+  if (hit) {
+    hitstopFor(s, HITSTOP);
+    punch(s, 6, p.x - x, p.y - y);
+    if (!notable && s.toastTone !== 'heart') toast(s, hot ? '烫辙' : '焰辙爆了', 'gold');
+  } else {
+    punch(s, 2, p.x - x, p.y - y);
+  }
+}
+
+function updateSparks(s, dt) {
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (k.dead) continue;
+    k.t -= dt;
+    if (k.t > 0) continue;
+    k.dead = true;
+    if (k.wet) {
+      s.stats.fizzles += 1;
+      burst(s, k.x, k.y, 5, COL.water, 70, 0.22, true);
+      burst(s, k.x, k.y, 3, COL.ash, 40, 0.18, true);
+      sfx('fizzle');
+      toast(s, '水洼熄了', 'water');
+    } else {
+      explode(s, k.x, k.y, k.hot);
+    }
+  }
+  if (s.sparks.length > 80) {
+    s.sparks = s.sparks.filter((k) => !k.dead);
+  }
+}
+
+function tickJuice(s, dt) {
+  if (s.toastT > 0) s.toastT -= dt;
+  if (s.flash > 0) s.flash -= dt;
+  if (s.player.squash > 0) s.player.squash -= dt;
+  for (let i = s.swells.length - 1; i >= 0; i--) {
+    s.swells[i].t += dt;
+    if (s.swells[i].t > 0.11) s.swells.splice(i, 1);
+  }
+  if (s.cam.punch > 0) {
+    s.cam.x = s.cam.dx * s.cam.punch;
+    s.cam.y = s.cam.dy * s.cam.punch;
+    s.cam.punch *= Math.pow(0.04, dt);
+    if (s.cam.punch < 0.08) {
+      s.cam.punch = 0;
+      s.cam.x = 0;
+      s.cam.y = 0;
+    }
+  } else {
+    s.cam.x = 0;
+    s.cam.y = 0;
+  }
+}
+
+function update(s, dt) {
+  s.time += dt;
+  tickJuice(s, dt);
+
+  if (s.hitstop > 0) {
+    s.hitstop -= dt;
+    for (let i = 0; i < s.parts.length; i++) s.parts[i].t -= dt;
     return;
   }
 
-  var C = {
-    bg: "#14080a",
-    ember: "#ff6a1a",
-    gold: "#ffd24a",
-    water: "#3a6b8c",
-    core: "#ff5d8f",
-    ash: "#6b5344",
-    heart: "#ff5d8f"
-  };
-
-  var W = 960;
-  var H = 540;
-  var FLOOR = { x: 36, y: 68, w: 888, h: 448 };
-
-  var reduce = false;
-  try {
-    reduce = !!(root.matchMedia && root.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  } catch (e) {}
-
-  var hitMs = reduce ? 20 : HITSTOP_MS;
-  var punchPx = reduce ? 0 : CAM_PUNCH;
-  var pMul = reduce ? 0.5 : 1;
-
-  var canvas = document.getElementById("game");
-  var ctx = canvas.getContext("2d");
-  var heartsEl = document.getElementById("hearts");
-  var toastEl = document.getElementById("toast");
-  var touchEl = document.getElementById("touch");
-  var stickEl = document.getElementById("stick");
-  var knobEl = document.getElementById("knob");
-  var dashBtn = document.getElementById("dashBtn");
-
-  var view = { scale: 1, ox: 0, oy: 0, dpr: 1 };
-  var cam = { x: 0, y: 0, tx: 0, ty: 0 };
-  var keys = {};
-  var stick = { x: 0, y: 0, on: false };
-  var mouseT = null;
-  var last = 0;
-  var hitstop = 0;
-  var accMove = 0;
-  var phase = "play";
-  var toast = { text: "", t: 0, color: C.gold };
-  var player, sparks, enemies, boxes, puddles, items, parts, blasts, ashMarks;
-
-  function sfx(name) {
-    var a = root.WeiHuoAudio || root.AudioFx;
-    if (a && typeof a[name] === "function") a[name]();
+  for (let i = s.parts.length - 1; i >= 0; i--) {
+    const q = s.parts[i];
+    q.t -= dt;
+    q.x += q.vx * dt;
+    q.y += q.vy * dt;
+    if (q.lift) q.vy -= 80 * dt;
+    q.vx *= 0.9;
+    q.vy *= 0.9;
+    if (q.t <= 0) s.parts.splice(i, 1);
   }
 
-  function say(text, color, hold) {
-    toast.text = text;
-    toast.t = hold ? 99 : 1.1;
-    toast.color = color || C.gold;
-    if (hold && toastEl) {
-      toastEl.textContent = text;
-      toastEl.hidden = false;
-      toastEl.style.color = toast.color;
-    } else if (toastEl && phase === "play") {
-      toastEl.hidden = true;
-    }
+  if (s.advanceT > 0) {
+    s.advanceT -= dt;
+    if (s.advanceT <= 0) applyRoom(s, s.roomIndex + 1);
   }
 
-  function hudHearts() {
-    if (heartsEl) heartsEl.textContent = "心×" + player.hearts;
+  if (s.won || s.dead) {
+    updateSparks(s, dt);
+    return;
   }
 
-  function fit() {
-    var wrap = document.getElementById("wrap") || document.body;
-    var dpr = Math.min(2, root.devicePixelRatio || 1);
-    var cw = wrap.clientWidth || root.innerWidth;
-    var ch = wrap.clientHeight || root.innerHeight;
-    canvas.style.width = cw + "px";
-    canvas.style.height = ch + "px";
-    canvas.width = (cw * dpr) | 0;
-    canvas.height = (ch * dpr) | 0;
-    view.dpr = dpr;
-    view.scale = Math.min(cw / W, ch / H);
-    view.ox = (cw - W * view.scale) * 0.5;
-    view.oy = (ch - H * view.scale) * 0.5;
+  const p = s.player;
+  if (p.inv > 0) p.inv -= dt;
+  if (p.dashCd > 0) p.dashCd -= dt;
+
+  let ix = s.input.x;
+  let iy = s.input.y;
+  const il = Math.hypot(ix, iy);
+  if (il > 1) { ix /= il; iy /= il; }
+  if (il > 0.12) {
+    p.faceX = ix;
+    p.faceY = iy;
   }
 
-  function worldFromEvent(ev) {
-    var rect = canvas.getBoundingClientRect();
-    var x = (ev.clientX - rect.left - view.ox) / view.scale - cam.x;
-    var y = (ev.clientY - rect.top - view.oy) / view.scale - cam.y;
-    return { x: x, y: y };
+  if (s.input.dash && p.dashT <= 0 && p.dashCd <= 0) {
+    p.dashT = DASH_TIME;
+    p.dashCd = DASH_CD;
+    s.input.dash = false;
+    sfx('dash');
+    hitstopFor(s, 0.04);
+    punch(s, 3, p.faceX, p.faceY);
+    burst(s, p.x, p.y, 4, COL.ember, 160, 0.12);
+    toast(s, '冲出去', 'gold');
   }
 
-  function kick(fromX, fromY, mag) {
-    if (!mag) return;
-    var dx = player.x - fromX;
-    var dy = player.y - fromY;
-    var d = hypot(dx, dy) || 1;
-    cam.tx += (dx / d) * mag;
-    cam.ty += (dy / d) * mag;
+  const moving = p.dashT > 0 || il > 0.12;
+  const hot = p.dashT > 0;
+  if (p.dashT > 0) {
+    p.dashT -= dt;
+    p.vx = p.faceX * DASH_SPEED;
+    p.vy = p.faceY * DASH_SPEED;
+  } else {
+    p.vx = ix * PLAYER_SPEED;
+    p.vy = iy * PLAYER_SPEED;
   }
 
-  function burst(x, y, n, cols, life, spd, up) {
-    n = Math.max(2, (n * pMul) | 0);
-    var i, a, v, col;
-    for (i = 0; i < n; i++) {
-      a = Math.random() * Math.PI * 2;
-      v = spd * (0.35 + Math.random());
-      col = cols[(Math.random() * cols.length) | 0];
-      parts.push({
-        x: x, y: y,
-        vx: Math.cos(a) * v,
-        vy: Math.sin(a) * v - (up ? 30 : 0),
-        t: life, life: life,
-        r: 1.6 + Math.random() * 2.2,
-        col: col
-      });
-    }
+  const ox = p.x;
+  const oy = p.y;
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
+  blockCrates(s, p);
+
+  const minX = p.r;
+  const maxX = s.roomW - p.r;
+  const minY = p.r;
+  const maxY = s.roomH - p.r;
+  if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) {
+    const cx = clamp(ox, minX, maxX);
+    const cy = clamp(oy, minY, maxY);
+    p.x = clamp(p.x, minX, maxX);
+    p.y = clamp(p.y, minY, maxY);
+    hurtPlayer(s, cx, cy, '出界了');
   }
 
-  function resetRoom() {
-    phase = "play";
-    accMove = 0;
-    hitstop = 0;
-    cam.x = cam.y = cam.tx = cam.ty = 0;
-    sparks = [];
-    parts = [];
-    blasts = [];
-    ashMarks = [];
-    items = [];
-    if (toastEl) toastEl.hidden = true;
-    toast.t = 0;
-
-    player = {
-      x: 128, y: 300, r: 11,
-      vx: 0, vy: 0,
-      fx: 1, fy: 0,
-      hearts: MAX_HEART,
-      inv: 0,
-      dashT: 0,
-      dashCd: 0,
-      flash: 0
-    };
-
-    puddles = [
-      { x: 340, y: 292, r: 52, name: "水洼" },
-      { x: 776, y: 438, r: 46, name: "水洼" }
-    ];
-
-    boxes = [
-      { x: 248, y: 158, r: 16, open: false, loot: "" },
-      { x: 428, y: 136, r: 16, open: false, loot: "回星" },
-      { x: 586, y: 228, r: 16, open: false, loot: "" },
-      { x: 470, y: 404, r: 16, open: false, loot: "" },
-      { x: 708, y: 312, r: 16, open: false, loot: "" },
-      { x: 838, y: 154, r: 16, open: false, loot: "心核" }
-    ];
-
-    enemies = [
-      { x: 392, y: 206, r: 13, hp: 3, flash: 0 },
-      { x: 552, y: 368, r: 13, hp: 3, flash: 0 },
-      { x: 704, y: 148, r: 13, hp: 3, flash: 0 },
-      { x: 292, y: 448, r: 13, hp: 3, flash: 0 },
-      { x: 854, y: 318, r: 13, hp: 3, flash: 0 }
-    ];
-
-    hudHearts();
-    say("夜市还亮着", C.gold);
+  if (moving) layTrail(s, ox, oy, p.x, p.y, hot);
+  else {
+    s.lastSparkX = p.x;
+    s.lastSparkY = p.y;
   }
 
-  function inputDir() {
-    var x = 0, y = 0;
-    if (keys.KeyW || keys.ArrowUp) y -= 1;
-    if (keys.KeyS || keys.ArrowDown) y += 1;
-    if (keys.KeyA || keys.ArrowLeft) x -= 1;
-    if (keys.KeyD || keys.ArrowRight) x += 1;
-    if (stick.on && (stick.x || stick.y)) {
-      x += stick.x;
-      y += stick.y;
-    }
-    if (!x && !y && mouseT && phase === "play") {
-      var mx = mouseT.x - player.x;
-      var my = mouseT.y - player.y;
-      if (hypot(mx, my) > 8) {
-        x = mx;
-        y = my;
-      } else {
-        mouseT = null;
-      }
-    }
-    var d = hypot(x, y);
-    if (d > 1) {
-      x /= d;
-      y /= d;
-    } else if (d > 0.12) {
-      x /= d;
-      y /= d;
-    } else {
-      x = 0;
-      y = 0;
-    }
-    return { x: x, y: y };
+  updateSparks(s, dt);
+
+  for (let i = 0; i < s.enemies.length; i++) {
+    const e = s.enemies[i];
+    if (e.hp <= 0) continue;
+    if (e.hitT > 0) e.hitT -= dt;
+    const d = dist(e.x, e.y, p.x, p.y) || 1;
+    e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
+    e.y += ((p.y - e.y) / d) * ENEMY_SPEED * dt;
+    blockCrates(s, e);
+    e.x = clamp(e.x, e.r, s.roomW - e.r);
+    e.y = clamp(e.y, e.r, s.roomH - e.r);
+    if (dist(e.x, e.y, p.x, p.y) < e.r + p.r - 1) hurtPlayer(s, e.x, e.y, '撞上了');
   }
 
-  function tryDash() {
-    if (phase !== "play") {
-      resetRoom();
-      return;
-    }
-    if (player.dashCd > 0 || player.dashT > 0) return;
-    var dir = inputDir();
-    if (!dir.x && !dir.y) {
-      dir.x = player.fx;
-      dir.y = player.fy;
-    }
-    var d = hypot(dir.x, dir.y) || 1;
-    player.fx = dir.x / d;
-    player.fy = dir.y / d;
-    player.dashT = 0.16;
-    player.dashCd = 0.52;
-    sfx("dash");
-    say("冲出去", C.ember);
-    burst(player.x, player.y, 4, [C.ember, C.gold], 0.12, 80, false);
-    hitstop = Math.max(hitstop, reduce ? 0.02 : 0.04);
-    kick(player.x - player.fx * 20, player.y - player.fy * 20, reduce ? 0 : 3);
-  }
-
-  function dropSpark(x, y, hot) {
-    if (inPuddle(x, y, puddles)) {
-      sfx("fizzle");
-      say("水洼熄了", C.water);
-      burst(x, y, 5, [C.water, C.ash], 0.22, 40, true);
-      ashMarks.push({ x: x, y: y, t: 0.35 });
-      return;
-    }
-    sparks.push({ x: x, y: y, age: 0, hot: !!hot });
-    if (hot) say("烫辙", C.gold);
-  }
-
-  function spawnItem(kind, x, y) {
-    items.push({ kind: kind, x: x, y: y, r: kind === "心核" ? 12 : 9, bob: 0 });
-  }
-
-  function openBox(b) {
-    if (b.open) return;
-    b.open = true;
-    say("箱开了", C.gold);
-    burst(b.x, b.y, 8, [C.ash, C.gold], 0.24, 70, false);
-    if (b.loot) spawnItem(b.loot, b.x, b.y - 6);
-  }
-
-  function hurt(fromX, fromY, why) {
-    if (phase !== "play" || player.inv > 0) return;
-    player.hearts -= 1;
-    player.inv = 0.78;
-    player.flash = 0.18;
-    var dx = player.x - fromX;
-    var dy = player.y - fromY;
-    var d = hypot(dx, dy) || 1;
-    player.vx += (dx / d) * 220;
-    player.vy += (dy / d) * 220;
-    sfx("hurt");
-    say(why, C.heart);
-    burst(player.x, player.y, 6, [C.heart, C.gold], 0.2, 90, false);
-    hitstop = Math.max(hitstop, hitMs / 1000);
-    kick(fromX, fromY, punchPx);
-    hudHearts();
-    if (player.hearts <= 0) {
-      phase = "fail";
-      say("心空了", C.heart, true);
+  for (let i = 0; i < s.items.length; i++) {
+    const it = s.items[i];
+    if (it.taken) continue;
+    if (dist(it.x, it.y, p.x, p.y) > it.r + p.r) continue;
+    it.taken = true;
+    if (it.kind === 'core') {
+      takeCore(s, it);
+    } else if (it.kind === 'heal') {
+      p.hearts = Math.min(HEART_MAX, p.hearts + 1);
+      toast(s, '回了一心', 'heart');
+      sfx('pickup');
+      burst(s, it.x, it.y, 8, COL.heart, 130, 0.26);
+      burst(s, it.x, it.y, 4, COL.gold, 90, 0.22);
     }
   }
+}
 
-  function boom(s) {
-    var r = blastRadius(s.hot);
-    var hit = false;
-    var i, e, b, d;
-
-    blasts.push({
-      x: s.x, y: s.y, r: r, hot: s.hot, t: 0, life: 0.096
-    });
-
-    if (phase === "play" && player.inv <= 0 && hypot(player.x - s.x, player.y - s.y) < r + player.r) {
-      hurt(s.x, s.y, "别踩自己的尾");
-      hit = true;
-    }
-
-    for (i = 0; i < enemies.length; i++) {
-      e = enemies[i];
-      if (e.hp <= 0) continue;
-      if (hypot(e.x - s.x, e.y - s.y) < r + e.r) {
-        e.hp -= s.hot ? 2 : 1;
-        e.flash = 0.16;
-        hit = true;
-        if (e.hp <= 0) {
-          burst(e.x, e.y, 12, [C.ember, C.ash], 0.32, 90, false);
-          say("烬卫倒了", C.ember);
-        }
-      }
-    }
-
-    for (i = 0; i < boxes.length; i++) {
-      b = boxes[i];
-      if (b.open) continue;
-      d = hypot(b.x - s.x, b.y - s.y);
-      if (d < r + b.r) {
-        openBox(b);
-        hit = true;
-      }
-    }
-
-    sfx("explode");
-    burst(s.x, s.y, s.hot ? 16 : 10, s.hot ? [C.gold, C.ember] : [C.ember, C.gold], s.hot ? 0.36 : 0.28, s.hot ? 140 : 110, false);
-    if (hit) {
-      hitstop = Math.max(hitstop, hitMs / 1000);
-      kick(s.x, s.y, punchPx);
-      if (phase === "play") say(s.hot ? "烫辙" : "焰辙爆了", C.gold);
-    } else {
-      kick(s.x, s.y, reduce ? 0 : 2);
-    }
+function takeCore(s, it) {
+  sfx('win');
+  hitstopFor(s, HITSTOP);
+  punch(s, 6, 0, -1);
+  burst(s, it.x, it.y, 18, COL.core, 200, 0.4);
+  burst(s, it.x, it.y, 8, COL.gold, 140, 0.32);
+  spawnSwell(s, it.x, it.y, 48, false, true);
+  s.won = true;
+  const last = s.roomIndex >= ROOM_PACK.rooms.length - 1;
+  if (last) {
+    s.cleared = true;
+    toast(s, '通关', 'core', 99);
+  } else {
+    s.advanceT = 1.15;
+    toast(s, '心核到手', 'core');
   }
+}
 
-  function clampPlayer() {
-    var minX = FLOOR.x + player.r;
-    var maxX = FLOOR.x + FLOOR.w - player.r;
-    var minY = FLOOR.y + player.r;
-    var maxY = FLOOR.y + FLOOR.h - player.r;
-    var out = player.x < minX || player.x > maxX || player.y < minY || player.y > maxY;
-    if (out) {
-      player.x = Math.max(minX, Math.min(maxX, player.x));
-      player.y = Math.max(minY, Math.min(maxY, player.y));
-      if (phase === "play") hurt(W * 0.5, H * 0.5, "出界了");
-    }
-  }
+function hexRgb(hex) {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
 
-  function update(dt) {
-    var i, e, it, s, p, b, dir, speed, running, step, nx, ny, d, j, e2, push;
+function mixHex(a, b, t) {
+  const A = hexRgb(a);
+  const B = hexRgb(b);
+  const r = Math.round(lerp(A[0], B[0], t));
+  const g = Math.round(lerp(A[1], B[1], t));
+  const bl = Math.round(lerp(A[2], B[2], t));
+  return 'rgb(' + r + ',' + g + ',' + bl + ')';
+}
 
-    cam.x += (cam.tx - cam.x) * 0.38;
-    cam.y += (cam.ty - cam.y) * 0.38;
-    cam.tx *= 0.78;
-    cam.ty *= 0.78;
+function glow(ctx, x, y, r, color, a) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, color);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.globalAlpha = a;
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
 
-    if (toast.t > 0 && toast.t < 90) toast.t -= dt;
+function swellScale(t, hot) {
+  const peak = hot ? 1.5 : 1.35;
+  if (t < 0.016) return lerp(0.7, peak, t / 0.016);
+  if (t < 0.096) return lerp(peak, 0, (t - 0.016) / 0.08);
+  return 0;
+}
 
-    for (i = parts.length - 1; i >= 0; i--) {
-      p = parts[i];
-      p.t -= dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 40 * dt;
-      if (p.t <= 0) parts.splice(i, 1);
-    }
-    for (i = blasts.length - 1; i >= 0; i--) {
-      blasts[i].t += dt;
-      if (blasts[i].t >= blasts[i].life) blasts.splice(i, 1);
-    }
-    for (i = ashMarks.length - 1; i >= 0; i--) {
-      ashMarks[i].t -= dt;
-      if (ashMarks[i].t <= 0) ashMarks.splice(i, 1);
-    }
+function draw(s, ctx) {
+  const W = s.roomW;
+  const H = s.roomH;
+  ctx.save();
+  ctx.translate(s.cam.x, s.cam.y);
+  ctx.fillStyle = COL.bg;
+  ctx.fillRect(-40, -40, W + 80, H + 80);
 
-    if (hitstop > 0) {
-      hitstop -= dt;
-      return;
-    }
-    if (phase !== "play") return;
+  ctx.strokeStyle = 'rgba(255,106,26,0.22)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(2, 2, W - 4, H - 4);
 
-    dir = inputDir();
-    player.dashCd = Math.max(0, player.dashCd - dt);
-    player.inv = Math.max(0, player.inv - dt);
-    player.flash = Math.max(0, player.flash - dt);
-
-    if (player.dashT > 0) {
-      player.dashT -= dt;
-      speed = 470;
-      player.vx = player.fx * speed;
-      player.vy = player.fy * speed;
-      running = true;
-    } else {
-      speed = 176;
-      if (dir.x || dir.y) {
-        player.fx = dir.x;
-        player.fy = dir.y;
-        player.vx = dir.x * speed;
-        player.vy = dir.y * speed;
-        running = true;
-      } else {
-        player.vx *= 0.72;
-        player.vy *= 0.72;
-        running = false;
-      }
-    }
-
-    player.x += player.vx * dt;
-    player.y += player.vy * dt;
-    clampPlayer();
-
-    if (running) {
-      step = hypot(player.vx, player.vy) * dt;
-      accMove += step;
-      while (accMove >= SPARK_GAP) {
-        accMove -= SPARK_GAP;
-        nx = player.x - player.fx * 8;
-        ny = player.y - player.fy * 8;
-        dropSpark(nx, ny, player.dashT > 0);
-      }
-    } else {
-      accMove = 0;
-    }
-
-    for (i = sparks.length - 1; i >= 0; i--) {
-      s = sparks[i];
-      s.age += dt;
-      if (s.age >= TAIL_T) {
-        sparks.splice(i, 1);
-        boom(s);
-      }
-    }
-
-    for (i = 0; i < enemies.length; i++) {
-      e = enemies[i];
-      e.flash = Math.max(0, e.flash - dt);
-      if (e.hp <= 0) continue;
-      d = hypot(player.x - e.x, player.y - e.y);
-      if (d > 1) {
-        e.x += ((player.x - e.x) / d) * 54 * dt;
-        e.y += ((player.y - e.y) / d) * 54 * dt;
-      }
-      for (j = 0; j < enemies.length; j++) {
-        if (i === j) continue;
-        e2 = enemies[j];
-        if (e2.hp <= 0) continue;
-        push = hypot(e.x - e2.x, e.y - e2.y);
-        if (push < 26 && push > 0.01) {
-          e.x += ((e.x - e2.x) / push) * 20 * dt;
-          e.y += ((e.y - e2.y) / push) * 20 * dt;
-        }
-      }
-      e.x = Math.max(FLOOR.x + e.r, Math.min(FLOOR.x + FLOOR.w - e.r, e.x));
-      e.y = Math.max(FLOOR.y + e.r, Math.min(FLOOR.y + FLOOR.h - e.r, e.y));
-      if (hypot(player.x - e.x, player.y - e.y) < player.r + e.r - 1) {
-        hurt(e.x, e.y, "撞上了");
-      }
-    }
-
-    for (i = 0; i < boxes.length; i++) {
-      b = boxes[i];
-      if (b.open) continue;
-      d = hypot(player.x - b.x, player.y - b.y);
-      if (d < player.r + b.r) {
-        push = player.r + b.r - d;
-        if (d < 0.01) d = 1;
-        player.x += ((player.x - b.x) / d) * push;
-        player.y += ((player.y - b.y) / d) * push;
-      }
-    }
-
-    for (i = items.length - 1; i >= 0; i--) {
-      it = items[i];
-      it.bob += dt;
-      if (hypot(player.x - it.x, player.y - it.y) < player.r + it.r) {
-        if (it.kind === "心核") {
-          phase = "win";
-          sfx("win");
-          burst(it.x, it.y, 18, [C.core, C.gold], 0.4, 120, false);
-          hitstop = Math.max(hitstop, hitMs / 1000);
-          kick(it.x, it.y, punchPx);
-          items.splice(i, 1);
-          say("过关", C.core, true);
-        } else if (it.kind === "回星") {
-          player.hearts = Math.min(MAX_HEART, player.hearts + 1);
-          hudHearts();
-          sfx("pickup");
-          say("回了一心", C.heart);
-          burst(it.x, it.y, 8, [C.heart, C.gold], 0.26, 80, false);
-          items.splice(i, 1);
-        }
-      }
-    }
-  }
-
-  function lerpHex(a, b, t) {
-    function hex(s) {
-      return [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16)];
-    }
-    var A = hex(a), B = hex(b);
-    var r = (A[0] + (B[0] - A[0]) * t) | 0;
-    var g = (A[1] + (B[1] - A[1]) * t) | 0;
-    var bl = (A[2] + (B[2] - A[2]) * t) | 0;
-    return "rgb(" + r + "," + g + "," + bl + ")";
-  }
-
-  function glow(x, y, r, col, a) {
-    ctx.save();
-    ctx.globalAlpha = a;
-    ctx.fillStyle = col;
+  ctx.strokeStyle = 'rgba(255,210,74,0.05)';
+  ctx.lineWidth = 1;
+  for (let x = 40; x < W; x += 40) {
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawFloor() {
-    ctx.fillStyle = C.bg;
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = "#1b0c0f";
-    ctx.fillRect(FLOOR.x, FLOOR.y, FLOOR.w, FLOOR.h);
-    ctx.strokeStyle = "rgba(255,106,26,0.22)";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(FLOOR.x + 1, FLOOR.y + 1, FLOOR.w - 2, FLOOR.h - 2);
-    var x, y;
-    ctx.fillStyle = "rgba(107,83,68,0.18)";
-    for (y = FLOOR.y + 18; y < FLOOR.y + FLOOR.h; y += 28) {
-      for (x = FLOOR.x + 18; x < FLOOR.x + FLOOR.w; x += 28) {
-        ctx.fillRect(x, y, 2, 2);
-      }
-    }
-    ctx.fillStyle = "rgba(255,210,74,0.16)";
-    ctx.font = "13px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("焰辙 · 烬卫 · 箱 · 水洼 · 心核", FLOOR.x + 12, FLOOR.y + FLOOR.h - 12);
-  }
-
-  function drawPuddle(p) {
-    ctx.save();
-    ctx.globalAlpha = 0.72;
-    ctx.fillStyle = C.water;
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y, p.r, p.r * 0.72, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = "#7aa7c4";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y, p.r * 0.62, p.r * 0.42, 0, 0, Math.PI * 2);
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
     ctx.stroke();
-    ctx.restore();
   }
-
-  function drawBox(b) {
-    ctx.save();
-    ctx.translate(b.x, b.y);
-    if (b.open) {
-      ctx.globalAlpha = 0.45;
-      ctx.fillStyle = C.ash;
-      ctx.fillRect(-15, -6, 30, 14);
-    } else {
-      ctx.fillStyle = "#4a382e";
-      ctx.strokeStyle = C.gold;
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.rect(-15, -15, 30, 30);
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(-15, 0);
-      ctx.lineTo(15, 0);
-      ctx.moveTo(0, -15);
-      ctx.lineTo(0, 15);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  function drawEnemy(e) {
-    if (e.hp <= 0) {
-      glow(e.x, e.y, 7, C.ash, 0.35);
-      return;
-    }
-    ctx.save();
-    ctx.translate(e.x, e.y);
-    ctx.fillStyle = e.flash > 0 ? C.gold : C.ash;
+  for (let y = 40; y < H; y += 40) {
     ctx.beginPath();
-    ctx.moveTo(0, -13);
-    ctx.lineTo(11, 8);
-    ctx.lineTo(-11, 8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = C.ember;
-    ctx.beginPath();
-    ctx.arc(-3.5, -2, 2, 0, Math.PI * 2);
-    ctx.arc(3.5, -2, 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawSpark(s) {
-    var u = Math.min(1, s.age / TAIL_T);
-    var col = lerpHex(C.ember, C.gold, u);
-    var rad = 3.1 + u * 2.6 + (s.hot ? 1.4 : 0);
-    glow(s.x, s.y, rad * 2.2, col, 0.18 + u * 0.2);
-    ctx.fillStyle = col;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, rad, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function drawBlast(b) {
-    var u = b.t / b.life;
-    var peak = b.hot ? 1.5 : 1.35;
-    var sc;
-    if (b.t < 0.016) sc = 0.7 + (peak - 0.7) * (b.t / 0.016);
-    else sc = peak * (1 - (b.t - 0.016) / 0.08);
-    if (sc < 0) sc = 0;
-    ctx.save();
-    ctx.globalAlpha = 0.85 * (1 - u);
-    ctx.strokeStyle = u < 0.35 ? C.ember : C.gold;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.r * sc, 0, Math.PI * 2);
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
     ctx.stroke();
-    ctx.globalAlpha = 0.28 * (1 - u);
-    ctx.fillStyle = C.gold;
-    ctx.fill();
-    ctx.restore();
   }
 
-  function drawPlayer() {
-    var blink = player.inv > 0 && ((player.inv * 16) | 0) % 2 === 0;
-    ctx.save();
-    ctx.translate(player.x, player.y);
-    ctx.rotate(Math.atan2(player.fy, player.fx));
-    glow(0, 0, 18, player.flash > 0 ? C.heart : C.ember, blink ? 0.12 : 0.32);
-    ctx.fillStyle = blink ? "#ffb08a" : C.ember;
-    ctx.beginPath();
-    ctx.moveTo(13, 0);
-    ctx.lineTo(-8, 8);
-    ctx.lineTo(-5, 0);
-    ctx.lineTo(-8, -8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = C.gold;
-    ctx.beginPath();
-    ctx.arc(1, 0, 3.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawItem(it) {
-    var bob = Math.sin(it.bob * 4) * 3;
-    ctx.save();
-    ctx.translate(it.x, it.y + bob);
-    glow(0, 0, it.r * 2, it.kind === "心核" ? C.core : C.heart, 0.35);
-    ctx.fillStyle = it.kind === "心核" ? C.core : C.heart;
-    ctx.beginPath();
-    ctx.arc(0, 0, it.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = C.gold;
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(it.kind, 0, it.r + 12);
-    ctx.restore();
-  }
-
-  function drawToastCanvas() {
-    if (toast.t <= 0 || !toast.text) return;
-    if (toast.t > 90) return;
-    ctx.save();
-    ctx.globalAlpha = Math.min(1, toast.t / 0.2);
-    ctx.fillStyle = toast.color;
-    ctx.font = "16px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(toast.text, W * 0.5, FLOOR.y + 22);
-    ctx.restore();
-  }
-
-  function render() {
-    var cw = canvas.width / view.dpr;
-    var ch = canvas.height / view.dpr;
-    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
-    ctx.fillStyle = C.bg;
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.save();
-    ctx.translate(view.ox + cam.x, view.oy + cam.y);
-    ctx.scale(view.scale, view.scale);
-
-    drawFloor();
-    var i;
-    for (i = 0; i < puddles.length; i++) drawPuddle(puddles[i]);
-    for (i = 0; i < ashMarks.length; i++) {
-      glow(ashMarks[i].x, ashMarks[i].y, 4, C.ash, 0.5);
+  for (let i = 0; i < s.waters.length; i++) {
+    const w = s.waters[i];
+    ctx.fillStyle = 'rgba(58,107,140,0.55)';
+    ctx.fillRect(w.x, w.y, w.w, w.h);
+    ctx.strokeStyle = 'rgba(180,220,240,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(w.x + 0.5, w.y + 0.5, w.w - 1, w.h - 1);
+    if (w.w >= 48 && w.h >= 28) {
+      ctx.fillStyle = 'rgba(200,230,255,0.55)';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.water, w.x + w.w / 2, w.y + w.h / 2 + 4);
     }
-    for (i = 0; i < boxes.length; i++) drawBox(boxes[i]);
-    for (i = 0; i < sparks.length; i++) drawSpark(sparks[i]);
-    for (i = 0; i < enemies.length; i++) drawEnemy(enemies[i]);
-    for (i = 0; i < items.length; i++) drawItem(items[i]);
-    for (i = 0; i < blasts.length; i++) drawBlast(blasts[i]);
-    for (i = 0; i < parts.length; i++) {
-      ctx.globalAlpha = Math.max(0, parts[i].t / parts[i].life);
-      ctx.fillStyle = parts[i].col;
+  }
+
+  for (let i = 0; i < s.crates.length; i++) {
+    const c = s.crates[i];
+    if (c.open) {
+      ctx.strokeStyle = 'rgba(255,210,74,0.25)';
+      ctx.strokeRect(c.x + 4, c.y + 4, c.w - 8, c.h - 8);
+      continue;
+    }
+    ctx.fillStyle = '#3a2218';
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = COL.gold;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(c.x + 1, c.y + 1, c.w - 2, c.h - 2);
+    ctx.fillStyle = COL.gold;
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(NAMES.crate, c.x + c.w / 2, c.y + c.h / 2 + 4);
+  }
+
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (k.dead) continue;
+    const age = 1 - k.t / TAIL_T;
+    let swell;
+    let col;
+    if (k.wet) {
+      swell = 3.2 * clamp(k.t / TAIL_T, 0.15, 1);
+      col = mixHex(COL.ash, COL.water, clamp(k.t / TAIL_T, 0, 1));
+    } else {
+      const near = Math.pow(age, 2.8);
+      swell = (k.hot ? 4.6 : 3.2) + (k.hot ? 16 : 12) * near;
+      col = mixHex(COL.ember, COL.gold, age * age);
+    }
+    glow(ctx, k.x, k.y, swell * 3.4, col, 0.22 + age * 0.5);
+    ctx.beginPath();
+    ctx.fillStyle = col;
+    ctx.arc(k.x, k.y, swell, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  for (let i = 0; i < s.swells.length; i++) {
+    const sw = s.swells[i];
+    const k = swellScale(sw.t, sw.hot);
+    if (k <= 0) continue;
+    const goldish = sw.t >= 0.016;
+    if (sw.dual) {
+      ctx.strokeStyle = COL.core;
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(parts[i].x, parts[i].y, parts[i].r, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.arc(sw.x, sw.y, sw.baseR * k * 0.72, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(sw.x, sw.y, sw.baseR * k * 1.05, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.strokeStyle = goldish ? COL.gold : COL.ember;
+      ctx.globalAlpha = goldish ? 0.9 : 0.75;
+      ctx.lineWidth = 3 + (sw.hot ? 2 : 0);
+      ctx.beginPath();
+      ctx.arc(sw.x, sw.y, sw.baseR * k, 0, Math.PI * 2);
+      ctx.stroke();
       ctx.globalAlpha = 1;
     }
-    if (phase !== "fail" || player.flash > 0) drawPlayer();
-    drawToastCanvas();
+  }
+
+  for (let i = 0; i < s.items.length; i++) {
+    const it = s.items[i];
+    if (it.taken) continue;
+    const pulse = 1 + Math.sin(s.time * 8) * 0.12;
+    if (it.kind === 'core') {
+      glow(ctx, it.x, it.y, 22 * pulse, COL.core, 0.7);
+      ctx.fillStyle = COL.core;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 8 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff0f5';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.core, it.x, it.y - 16);
+    } else {
+      glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COL.gold;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.heal, it.x, it.y - 14);
+    }
+  }
+
+  for (let i = 0; i < s.enemies.length; i++) {
+    const e = s.enemies[i];
+    if (e.hp <= 0) continue;
+    const flash = e.hitT > 0;
+    glow(ctx, e.x, e.y, 22, COL.ember, 0.18);
+    ctx.beginPath();
+    ctx.fillStyle = flash ? COL.gold : '#2a1410';
+    ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = COL.ember;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = COL.ember;
+    ctx.beginPath();
+    ctx.arc(e.x - 4, e.y - 3, 2, 0, Math.PI * 2);
+    ctx.arc(e.x + 4, e.y - 3, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = COL.gold;
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(NAMES.enemy, e.x, e.y + e.r + 12);
+    for (let h = 0; h < ENEMY_HP; h++) {
+      ctx.fillStyle = h < e.hp ? COL.ember : 'rgba(255,106,26,0.2)';
+      ctx.fillRect(e.x - 10 + h * 8, e.y + e.r + 14, 6, 3);
+    }
+  }
+
+  const p = s.player;
+  const blink = p.inv > 0 && Math.floor(s.time * 16) % 2 === 0;
+  if (!blink) {
+    const sq = p.squash > 0 ? 0.78 : 1;
+    glow(ctx, p.x, p.y, 26, COL.ember, 0.55);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.scale(1 + (1 - sq) * 0.25, sq);
+    ctx.beginPath();
+    ctx.fillStyle = '#fff3d6';
+    ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = COL.gold;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.fillStyle = COL.ember;
+    ctx.arc(p.faceX * 3, p.faceY * 3, 3, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   }
 
-  function frame(now) {
-    if (!last) last = now;
-    var dt = Math.min(0.033, (now - last) / 1000);
-    last = now;
-    update(dt);
-    render();
-    root.requestAnimationFrame(frame);
+  for (let i = 0; i < s.parts.length; i++) {
+    const q = s.parts[i];
+    ctx.globalAlpha = clamp(q.t / Math.max(0.12, q.max || 0.35), 0, 1);
+    ctx.fillStyle = q.color;
+    ctx.beginPath();
+    ctx.arc(q.x, q.y, q.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
-  function onKey(e, down) {
-    keys[e.code] = down;
-    if (!down) return;
-    if (e.code === "Space") {
+  if (s.flash > 0) {
+    ctx.fillStyle = 'rgba(255,40,60,' + (s.flash * 1.4) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  ctx.restore();
+}
+
+function bindInput(s, canvas, stick, knob, dashBtn, touchRoot) {
+  const keys = new Set();
+  function syncKeys() {
+    let x = 0;
+    let y = 0;
+    if (keys.has('KeyW') || keys.has('ArrowUp')) y -= 1;
+    if (keys.has('KeyS') || keys.has('ArrowDown')) y += 1;
+    if (keys.has('KeyA') || keys.has('ArrowLeft')) x -= 1;
+    if (keys.has('KeyD') || keys.has('ArrowRight')) x += 1;
+    if (!stick.active) {
+      s.input.x = x;
+      s.input.y = y;
+    }
+  }
+
+  window.addEventListener('keydown', (e) => {
+    unlockAudio();
+    keys.add(e.code);
+    if (e.code === 'Space') {
       e.preventDefault();
-      tryDash();
+      s.input.dash = true;
     }
-    if (e.code === "KeyR") {
-      sfx("beep");
-      say("再来", C.gold);
-      resetRoom();
+    if (e.code === 'KeyR') {
+      applyRoom(s, s.cleared ? 0 : s.roomIndex);
+      toast(s, '再来', 'gold');
     }
-  }
-
-  function bindTouch() {
-    var coarse = false;
-    try {
-      coarse = ("ontouchstart" in root) || (root.matchMedia && root.matchMedia("(pointer: coarse)").matches);
-    } catch (e) {}
-    if (!coarse || !touchEl) return;
-    touchEl.hidden = false;
-
-    function setStick(ev) {
-      if (!stickEl) return;
-      var rect = stickEl.getBoundingClientRect();
-      var cx = rect.left + rect.width * 0.5;
-      var cy = rect.top + rect.height * 0.5;
-      var x = ev.clientX - cx;
-      var y = ev.clientY - cy;
-      var max = rect.width * 0.5 - 8;
-      var d = hypot(x, y);
-      if (d > max) {
-        x = (x / d) * max;
-        y = (y / d) * max;
-      }
-      stick.on = true;
-      stick.x = x / max;
-      stick.y = y / max;
-      if (knobEl) {
-        knobEl.style.transform = "translate(" + x + "px," + y + "px)";
-      }
+    if (e.code === 'KeyN') {
+      applyRoom(s, s.roomIndex + 1);
     }
-    function endStick() {
-      stick.on = false;
-      stick.x = 0;
-      stick.y = 0;
-      if (knobEl) knobEl.style.transform = "";
-    }
-    stickEl.addEventListener("pointerdown", function (ev) {
-      stickEl.setPointerCapture(ev.pointerId);
-      setStick(ev);
-    });
-    stickEl.addEventListener("pointermove", function (ev) {
-      if (stick.on) setStick(ev);
-    });
-    stickEl.addEventListener("pointerup", endStick);
-    stickEl.addEventListener("pointercancel", endStick);
-    if (dashBtn) {
-      dashBtn.addEventListener("pointerdown", function (ev) {
-        ev.preventDefault();
-        tryDash();
-      });
-    }
-  }
-
-  root.addEventListener("keydown", function (e) { onKey(e, true); });
-  root.addEventListener("keyup", function (e) { onKey(e, false); });
-  canvas.addEventListener("pointerdown", function (ev) {
-    if (phase !== "play") {
-      resetRoom();
-      return;
-    }
-    mouseT = worldFromEvent(ev);
+    syncKeys();
   });
-  root.addEventListener("resize", fit);
-  bindTouch();
-  fit();
-  resetRoom();
-  root.requestAnimationFrame(frame);
+  window.addEventListener('keyup', (e) => {
+    keys.delete(e.code);
+    if (e.code === 'Space') s.input.dash = false;
+    syncKeys();
+  });
 
-  root.WeiHuo = {
-    TAIL_T: TAIL_T,
-    selfCheck: selfCheck,
-    sparkDropsForPath: sparkDropsForPath
+  let mouseOn = false;
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch') return;
+    unlockAudio();
+    mouseOn = true;
+    aimMouse(e);
+  });
+  window.addEventListener('pointerup', () => {
+    if (mouseOn) {
+      mouseOn = false;
+      if (!stick.active) { s.input.x = 0; s.input.y = 0; syncKeys(); }
+    }
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (mouseOn) aimMouse(e);
+  });
+
+  function aimMouse(e) {
+    const world = screenToWorld(canvas, e.clientX, e.clientY);
+    const dx = world.x - s.player.x;
+    const dy = world.y - s.player.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 8) {
+      s.input.x = dx / d;
+      s.input.y = dy / d;
+    }
+  }
+
+  stick.active = false;
+  let stickId = null;
+  function setKnob(nx, ny) {
+    knob.style.transform = 'translate(' + (nx * 28) + 'px,' + (ny * 28) + 'px)';
+  }
+  function stickAt(cx, cy) {
+    const rec = stick.getBoundingClientRect();
+    const x = (cx - (rec.left + rec.width / 2)) / (rec.width * 0.5);
+    const y = (cy - (rec.top + rec.height / 2)) / (rec.height * 0.5);
+    const d = Math.hypot(x, y);
+    const cl = d > 1 ? 1 / d : 1;
+    s.input.x = x * cl;
+    s.input.y = y * cl;
+    setKnob(s.input.x, s.input.y);
+  }
+  stick.addEventListener('pointerdown', (e) => {
+    unlockAudio();
+    stick.active = true;
+    stickId = e.pointerId;
+    stick.setPointerCapture(e.pointerId);
+    stickAt(e.clientX, e.clientY);
+  });
+  stick.addEventListener('pointermove', (e) => {
+    if (stick.active && e.pointerId === stickId) stickAt(e.clientX, e.clientY);
+  });
+  function endStick() {
+    stick.active = false;
+    stickId = null;
+    s.input.x = 0;
+    s.input.y = 0;
+    setKnob(0, 0);
+    syncKeys();
+  }
+  stick.addEventListener('pointerup', endStick);
+  stick.addEventListener('pointercancel', endStick);
+
+  dashBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    unlockAudio();
+    s.input.dash = true;
+  });
+  dashBtn.addEventListener('pointerup', () => { s.input.dash = false; });
+
+  window.addEventListener('touchstart', () => {
+    touchRoot.hidden = false;
+  }, { once: true, passive: true });
+}
+
+let view = { scale: 1, ox: 0, oy: 0, dpr: 1 };
+
+function fitCanvas(canvas, rw, rh) {
+  const wrap = canvas.parentElement;
+  const dpr = window.devicePixelRatio || 1;
+  const ww = wrap.clientWidth;
+  const hh = wrap.clientHeight;
+  canvas.width = Math.floor(ww * dpr);
+  canvas.height = Math.floor(hh * dpr);
+  view.dpr = dpr;
+  view.scale = Math.min(ww / rw, hh / rh);
+  view.ox = (ww - rw * view.scale) / 2;
+  view.oy = (hh - rh * view.scale) / 2;
+}
+
+function screenToWorld(canvas, cx, cy) {
+  const rec = canvas.getBoundingClientRect();
+  const x = cx - rec.left;
+  const y = cy - rec.top;
+  return {
+    x: (x - view.ox) / view.scale,
+    y: (y - view.oy) / view.scale,
   };
-})(typeof window !== "undefined" ? window : this);
+}
+
+function syncHud(s, heartsEl, toastEl, hintEl, roomEl) {
+  heartsEl.textContent = '心×' + s.player.hearts;
+  if (roomEl && s.room) roomEl.textContent = s.room.name;
+  if (hintEl && s.room) hintEl.textContent = s.room.hint || NAMES.hint;
+  const hold = s.toast && (s.toastT > 0 || s.cleared || s.dead);
+  if (hold) {
+    toastEl.hidden = false;
+    const extra = (s.cleared || s.dead) ? '  ·  R 再来' : '';
+    toastEl.textContent = s.toast + extra;
+    const big = s.cleared || s.dead;
+    toastEl.className = 'toast ' + (s.toastTone || 'gold') + (big ? ' big' : '');
+  } else {
+    toastEl.hidden = true;
+  }
+}
+
+function boot() {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const heartsEl = document.getElementById('hearts');
+  const toastEl = document.getElementById('toast');
+  const hintEl = document.getElementById('hint');
+  const roomEl = document.getElementById('roomName');
+  const stick = document.getElementById('stick');
+  const knob = document.getElementById('knob');
+  const dashBtn = document.getElementById('dashBtn');
+  const touchRoot = document.getElementById('touch');
+  const s = makeState();
+  applyRoom(s, 0);
+  bindInput(s, canvas, stick, knob, dashBtn, touchRoot);
+  fitCanvas(canvas, s.roomW, s.roomH);
+  window.addEventListener('resize', () => fitCanvas(canvas, s.roomW, s.roomH));
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+    touchRoot.hidden = false;
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = clamp((now - last) / 1000, 0, 0.033);
+    last = now;
+    update(s, dt);
+    fitCanvas(canvas, s.roomW, s.roomH);
+    const dpr = view.dpr;
+    ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
+    draw(s, ctx);
+    syncHud(s, heartsEl, toastEl, hintEl, roomEl);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+function loadRoomsNode() {
+  const fs = require('fs');
+  const path = require('path');
+  const file = path.join(__dirname, '..', 'levels', 'rooms.json');
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function selfCheck() {
+  if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
+  if (!ROOM_PACK || !ROOM_PACK.rooms) throw new Error('rooms.json missing');
+  if (ROOM_PACK.rooms.length !== 6) throw new Error('need 6 rooms');
+  for (let i = 0; i < ROOM_NAMES.length; i++) {
+    if (ROOM_PACK.rooms[i].name !== ROOM_NAMES[i]) {
+      throw new Error('room ' + i + ' should be ' + ROOM_NAMES[i]);
+    }
+  }
+  if (ROOM_PACK.rooms[0].name !== '空场') throw new Error('first room must be 空场');
+
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙'];
+  const blob = Object.keys(NAMES).map((k) => NAMES[k]).join('');
+  for (let i = 0; i < need.length; i++) {
+    if (blob.indexOf(need[i]) < 0) throw new Error('missing name ' + need[i]);
+    if (!/[\u4e00-\u9fff]/.test(need[i])) throw new Error('not Chinese');
+  }
+  if (NAMES.hint !== '跑过的路两秒后会爆') throw new Error('hint');
+
+  const banned = [
+    '\u4f20\u9001',
+    '\u98de\u884c',
+    '\u4e09\u53c9\u621f',
+    '\u6fc0\u6012',
+    '\u5929\u4f7f',
+    '\u6076\u9b54',
+  ];
+  const scan = blob + NAMES.hint + ROOM_NAMES.join('') + '尾火过关心核到手通关失败再来';
+  for (let i = 0; i < banned.length; i++) {
+    if (scan.indexOf(banned[i]) >= 0) throw new Error('banned');
+  }
+
+  const wet = makeState();
+  applyRoom(wet, 2);
+  if (wet.room.name !== '水巷') throw new Error('room 2 水巷');
+  if (wet.waters.length < 1) throw new Error('水巷 should have water');
+  const puddle = wet.waters[0];
+  dropSpark(wet, puddle.x + puddle.w * 0.5, puddle.y + puddle.h * 0.5, false);
+  if (!wet.sparks[0].wet) throw new Error('spark in water should be wet');
+  for (let i = 0; i < 24; i++) update(wet, 0.1);
+  if (wet.stats.fizzles < 1) throw new Error('water should fizzle');
+  if (wet.stats.booms !== 0) throw new Error('water must not boom');
+
+  const dry = makeState();
+  applyRoom(dry, 0);
+  dropSpark(dry, 200, 120, false);
+  for (let i = 0; i < 24; i++) update(dry, 0.1);
+  if (dry.stats.booms < 1) throw new Error('dry spark should boom at TAIL_T');
+
+  const still = makeState();
+  applyRoom(still, 0);
+  still.input.x = 0;
+  still.input.y = 0;
+  for (let i = 0; i < 20; i++) update(still, 0.05);
+  if (still.sparks.length !== 0 || still.stats.drops !== 0) {
+    throw new Error('standing drops 0');
+  }
+
+  const run = makeState();
+  applyRoom(run, 0);
+  run.input.x = 1;
+  run.input.y = 0;
+  for (let i = 0; i < 20; i++) update(run, 0.05);
+  if (run.stats.drops < 1) throw new Error('moving should drop sparks');
+
+  const burn = makeState();
+  applyRoom(burn, 0);
+  const hearts = burn.player.hearts;
+  dropSpark(burn, burn.player.x, burn.player.y, false);
+  for (let i = 0; i < 24; i++) update(burn, 0.1);
+  if (burn.player.hearts >= hearts) throw new Error('own blast should hurt');
+
+  const seq = makeState();
+  applyRoom(seq, 0);
+  if (seq.room.name !== '空场') throw new Error('boot room 空场');
+  seq.items.push({ kind: 'core', x: seq.player.x, y: seq.player.y, r: 10, taken: false });
+  update(seq, 0.02);
+  if (!seq.won) throw new Error('core should clear room');
+  if (seq.cleared) throw new Error('empty field is not last');
+  for (let i = 0; i < 80; i++) update(seq, 0.05);
+  if (seq.room.name !== '追者') throw new Error('after 心核 go to 追者');
+
+  const last = makeState();
+  applyRoom(last, 5);
+  last.items.push({ kind: 'core', x: last.player.x, y: last.player.y, r: 10, taken: false });
+  update(last, 0.02);
+  if (!last.won || !last.cleared) throw new Error('last room should 通关');
+  if (last.toast !== '通关') throw new Error('last toast 通关');
+  if (last.advanceT > 0) throw new Error('last room must not advance');
+
+  for (let i = 0; i < 6; i++) {
+    const probe = makeState();
+    applyRoom(probe, i);
+    if (probe.room.name !== ROOM_NAMES[i]) throw new Error('apply ' + ROOM_NAMES[i]);
+  }
+
+  console.log('selfCheck ok', {
+    TAIL_T,
+    rooms: ROOM_NAMES,
+    first: ROOM_PACK.rooms[0].name,
+    names: NAMES,
+    fizzles: wet.stats.fizzles,
+    standDrops: still.stats.drops,
+  });
+}
+
+function startBrowser() {
+  fetch('levels/rooms.json').then((res) => {
+    if (!res.ok) throw new Error('rooms.json');
+    return res.json();
+  }).then((data) => {
+    ROOM_PACK = data;
+    boot();
+  }).catch((err) => {
+    console.error(err);
+  });
+}
+
+if (typeof window === 'undefined') {
+  ROOM_PACK = loadRoomsNode();
+  selfCheck();
+} else if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startBrowser);
+  } else {
+    startBrowser();
+  }
+}
