@@ -48,6 +48,7 @@ const NAMES = {
   core: '心核',
   heal: '回星',
   water: '水洼',
+  oil: '油渍',
   tide: '潮涌',
   spark: '焰辙',
   hound: '循辙',
@@ -97,6 +98,8 @@ const TOAST = {
   seed: '焰种放大下一爆',
   seedGet: '捡到焰种',
   seedBoom: '焰种爆了',
+  oil: '油渍烫了',
+  oilRoom: '油渍烫爆',
 };
 
 const COL = {
@@ -104,6 +107,7 @@ const COL = {
   ember: '#ff6a1a',
   gold: '#ffd24a',
   water: '#3a6b8c',
+  oil: '#8a4a12',
   core: '#ff5d8f',
   heart: '#ff5d8f',
   ash: '#6b5344',
@@ -205,6 +209,16 @@ function inWater(s, x, y) {
   return false;
 }
 
+function inOil(s, x, y) {
+  if (!s || !s.oils) return false;
+  for (let i = 0; i < s.oils.length; i++) {
+    const o = s.oils[i];
+    if (x < o.x || x > o.x + o.w || y < o.y || y > o.y + o.h) continue;
+    return true;
+  }
+  return false;
+}
+
 function tickTide(s, dt) {
   const was = !!s.tideHigh;
   s.tideT = (s.tideT || 0) + dt;
@@ -298,6 +312,7 @@ function makeState() {
     enemies: [],
     crates: [],
     waters: [],
+    oils: [],
     items: [],
     parts: [],
     rings: [],
@@ -316,6 +331,7 @@ function makeState() {
     stats: { booms: 0, fizzles: 0, drops: 0 },
     time: 0,
     taughtDash: false,
+    taughtOil: false,
     chainToastT: 0,
     lastBoomX: null,
     lastBoomY: null,
@@ -392,8 +408,12 @@ function resetRoom(s, index, keepHearts) {
   s.burstWait = 0;
   s.tideT = 0;
   s.tideHigh = false;
+  s.taughtOil = false;
   s.waters = (room.puddles || []).map(function (p) {
     return { x: p.x, y: p.y, w: p.w, h: p.h, tide: !!p.tide };
+  });
+  s.oils = (room.oils || []).map(function (p) {
+    return { x: p.x, y: p.y, w: p.w, h: p.h };
   });
   s.crates = (room.crates || []).map(function (c) {
     return {
@@ -440,6 +460,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '密线') toast(s, TOAST.wire, 1.4, COL.gold);
   else if (room.name === '潮廊') toast(s, TOAST.tide, 1.4, COL.water);
   else if (room.name === '种廊') toast(s, TOAST.seed, 1.4, COL.gold);
+  else if (room.name === '油廊') toast(s, TOAST.oilRoom, 1.4, COL.gold);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -539,8 +560,14 @@ function updateHound(s, e, dt) {
 
 function dropSpark(s, x, y, hot) {
   const wet = inWater(s, x, y);
-  s.sparks.push({ x: x, y: y, t: TAIL_T, hot: !!hot, wet: wet, dead: false, fuse: false });
+  const oiled = !wet && inOil(s, x, y);
+  if (oiled) hot = true;
+  s.sparks.push({ x: x, y: y, t: TAIL_T, hot: !!hot, wet: wet, oiled: oiled, dead: false, fuse: false });
   s.stats.drops += 1;
+  if (oiled && !s.taughtOil) {
+    toast(s, TOAST.oil, 1.1, COL.gold);
+    s.taughtOil = true;
+  }
   return s.sparks[s.sparks.length - 1];
 }
 
@@ -1367,6 +1394,20 @@ function draw(s, ctx) {
     ctx.stroke();
   }
 
+  for (let i = 0; i < (s.oils || []).length; i++) {
+    const o = s.oils[i];
+    const rgb = hexRgb(COL.oil);
+    let a = 0.45;
+    if (!reducedMotion()) {
+      a = 0.4 + 0.1 * (0.5 + 0.5 * Math.sin((s.time || 0) * 2.4 + i * 0.7));
+    }
+    ctx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + a + ')';
+    ctx.fillRect(o.x, o.y, o.w, o.h);
+    ctx.strokeStyle = 'rgba(255,210,74,0.42)';
+    ctx.lineWidth = 1.5 / fit.scale;
+    ctx.strokeRect(o.x + 1, o.y + 1, o.w - 2, o.h - 2);
+  }
+
   const high = tideHigh(s);
   for (let i = 0; i < s.waters.length; i++) {
     const w = s.waters[i];
@@ -1938,8 +1979,8 @@ function selfCheck() {
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 15) throw new Error('need 15 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊'];
+  if (!ROOMS || ROOMS.length !== 16) throw new Error('need 16 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -1959,6 +2000,8 @@ function selfCheck() {
   if (ROOMS[13].name !== '潮廊') throw new Error('room 14 潮廊');
   if (ROOMS[14].id !== 'zhonglang') throw new Error('种廊 id');
   if (ROOMS[14].name !== '种廊') throw new Error('room 15 种廊');
+  if (ROOMS[15].id !== 'youlang') throw new Error('油廊 id');
+  if (ROOMS[15].name !== '油廊') throw new Error('room 16 油廊');
   if (SEED_R !== 72) throw new Error('SEED_R 72');
   if (BLAST_R !== 36) throw new Error('BLAST_R 36');
   if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
@@ -1971,7 +2014,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -2100,10 +2143,10 @@ function selfCheck() {
 
   const hud0 = makeState();
   resetRoom(hud0, 0, false);
-  if (roomHudText(hud0) !== '空场 · 1/15') throw new Error('HUD 空场 1/15');
+  if (roomHudText(hud0) !== '空场 · 1/16') throw new Error('HUD 空场 1/16');
   const hud2 = makeState();
   resetRoom(hud2, 2, false);
-  if (roomHudText(hud2) !== '水巷 · 3/15') throw new Error('HUD 3/15');
+  if (roomHudText(hud2) !== '水巷 · 3/16') throw new Error('HUD 3/16');
 
   const lane = makeState();
   resetRoom(lane, 4, false);
@@ -2315,7 +2358,7 @@ function selfCheck() {
 
   const hudAsh = makeState();
   resetRoom(hudAsh, 10, false);
-  if (roomHudText(hudAsh) !== '灰径 · 11/15') throw new Error('HUD 灰径 11/15');
+  if (roomHudText(hudAsh) !== '灰径 · 11/16') throw new Error('HUD 灰径 11/16');
 
   const ring = makeState();
   resetRoom(ring, 11, false);
@@ -2342,7 +2385,7 @@ function selfCheck() {
 
   const hudRing = makeState();
   resetRoom(hudRing, 11, false);
-  if (roomHudText(hudRing) !== '环行 · 12/15') throw new Error('HUD 环行 12/15');
+  if (roomHudText(hudRing) !== '环行 · 12/16') throw new Error('HUD 环行 12/16');
 
   const wire = makeState();
   resetRoom(wire, 12, false);
@@ -2371,7 +2414,7 @@ function selfCheck() {
   if (wire.roomName !== '潮廊') throw new Error('core advances to 潮廊');
   const hudWire = makeState();
   resetRoom(hudWire, 12, false);
-  if (roomHudText(hudWire) !== '密线 · 13/15') throw new Error('HUD 密线 13/15');
+  if (roomHudText(hudWire) !== '密线 · 13/16') throw new Error('HUD 密线 13/16');
 
   // big-chain hitstop on 5连
   const big = makeState();
@@ -2687,7 +2730,7 @@ function selfCheck() {
   if (chao.roomName !== '种廊') throw new Error('core advances to 种廊');
   const hudChao = makeState();
   resetRoom(hudChao, 13, false);
-  if (roomHudText(hudChao) !== '潮廊 · 14/15') throw new Error('HUD 潮廊 14/15');
+  if (roomHudText(hudChao) !== '潮廊 · 14/16') throw new Error('HUD 潮廊 14/16');
 
   if (NAMES.seed !== '焰种') throw new Error('焰种 name');
   if (TOAST.seed !== '焰种放大下一爆') throw new Error('焰种放大下一爆');
@@ -2749,10 +2792,137 @@ function selfCheck() {
   if (!zBox.open) throw new Error('种廊 seeded opens thick');
   if (zhong.seed !== 0) throw new Error('种廊 seed consumed');
   takeCore(zhong, { x: 100, y: 100 });
-  if (!zhong.won || zhong.toast !== TOAST.all) throw new Error('种廊 should 通关');
+  if (zhong.won) throw new Error('种廊 should not 通关');
+  for (let i = 0; i < 20; i++) update(zhong, 0.1);
+  if (zhong.roomName !== '油廊') throw new Error('core advances to 油廊');
   const hudZhong = makeState();
   resetRoom(hudZhong, 14, false);
-  if (roomHudText(hudZhong) !== '种廊 · 15/15') throw new Error('HUD 种廊 15/15');
+  if (roomHudText(hudZhong) !== '种廊 · 15/16') throw new Error('HUD 种廊 15/16');
+
+  if (NAMES.oil !== '油渍') throw new Error('油渍 name');
+  if (COL.oil !== '#8a4a12') throw new Error('COL.oil');
+  if (TOAST.oil !== '油渍烫了') throw new Error('油渍烫了');
+  if (TOAST.oilRoom !== '油渍烫爆') throw new Error('油渍烫爆');
+  if (typeof inOil !== 'function') throw new Error('inOil');
+
+  const oilU = makeState();
+  resetRoom(oilU, 0, false);
+  oilU.player.x = 40;
+  oilU.player.y = 40;
+  oilU.oils = [{ x: 200, y: 180, w: 80, h: 80 }];
+  dropSpark(oilU, 240, 220, false);
+  if (!oilU.sparks[0].oiled || !oilU.sparks[0].hot || oilU.sparks[0].wet) {
+    throw new Error('oil spark oiled+hot');
+  }
+  const oilDropToast = oilU.toast;
+  if (oilDropToast !== TOAST.oil) throw new Error('油渍烫了 at drop');
+  oilU.sparks[0].t = 0;
+  update(oilU, 0.016);
+  if (!oilU.embers.length || Math.abs(oilU.embers[0].r - HOT_BLAST_R) > 1e-9) {
+    throw new Error('oil boom HOT_BLAST_R');
+  }
+  if (oilDropToast !== TOAST.oil && oilU.toast !== TOAST.hot) {
+    throw new Error('oil toast 油渍烫了 or 烫辙');
+  }
+
+  const oilWet = makeState();
+  resetRoom(oilWet, 0, false);
+  oilWet.player.x = 40;
+  oilWet.player.y = 40;
+  oilWet.oils = [{ x: 200, y: 180, w: 80, h: 80 }];
+  oilWet.waters = [{ x: 200, y: 180, w: 80, h: 80 }];
+  dropSpark(oilWet, 240, 220, false);
+  if (!oilWet.sparks[0].wet || oilWet.sparks[0].oiled) throw new Error('water wins over oil');
+  oilWet.sparks[0].t = 0;
+  update(oilWet, 0.016);
+  if (oilWet.stats.booms !== 0) throw new Error('wet oil no boom');
+  if (oilWet.stats.fizzles < 1) throw new Error('wet oil fizzle');
+
+  const oilGapCold = makeState();
+  resetRoom(oilGapCold, 0, false);
+  oilGapCold.player.x = 40;
+  oilGapCold.player.y = 40;
+  dropSpark(oilGapCold, 200, 200, false);
+  dropSpark(oilGapCold, 250, 200, false);
+  oilGapCold.sparks[0].t = 0;
+  update(oilGapCold, 0.016);
+  if (oilGapCold.sparks[1].t <= CHAIN_T) throw new Error('dry 50px no chain');
+
+  const oilGapHot = makeState();
+  resetRoom(oilGapHot, 0, false);
+  oilGapHot.player.x = 40;
+  oilGapHot.player.y = 40;
+  oilGapHot.oils = [{ x: 180, y: 180, w: 40, h: 40 }];
+  dropSpark(oilGapHot, 200, 200, false);
+  dropSpark(oilGapHot, 250, 200, false);
+  if (!oilGapHot.sparks[0].oiled || !oilGapHot.sparks[0].hot) throw new Error('gap first oiled');
+  if (oilGapHot.sparks[1].oiled) throw new Error('gap neighbor dry');
+  oilGapHot.sparks[0].t = 0;
+  update(oilGapHot, 0.016);
+  if (oilGapHot.sparks[1].t > CHAIN_T + 1e-9) throw new Error('oil-hot chains 50px');
+
+  const you = makeState();
+  resetRoom(you, 15, false);
+  if (you.roomName !== '油廊' || you.roomId !== 'youlang') throw new Error('youlang load');
+  if (you.toast !== TOAST.oilRoom) throw new Error('油廊 intro');
+  if (you.roomW !== 960 || you.roomH !== 400) throw new Error('油廊 size');
+  if (you.player.x !== 80 || you.player.y !== 200) throw new Error('油廊 spawn');
+  if (!you.oils.length) throw new Error('油廊 needs 油渍');
+  let youStill = 0;
+  let youTide = 0;
+  for (let i = 0; i < you.waters.length; i++) {
+    if (you.waters[i].tide) youTide += 1;
+    else youStill += 1;
+  }
+  if (youStill < 1) throw new Error('油廊 needs static 水洼');
+  if (youTide) throw new Error('油廊 no tide');
+  let youCore = 0;
+  let youHeal = 0;
+  let youThick = 0;
+  for (let i = 0; i < you.crates.length; i++) {
+    if (you.crates[i].loot === 'core') youCore += 1;
+    if (you.crates[i].loot === 'heal') youHeal += 1;
+    if (you.crates[i].thick) youThick += 1;
+  }
+  if (youCore !== 1) throw new Error('油廊 心核');
+  if (youHeal < 1) throw new Error('油廊 回星');
+  const yBox = you.crates.find(function (c) { return c.loot === 'core'; });
+  if (!yBox || yBox.thick) throw new Error('油廊 心核 crate is not thick');
+  if (youThick) throw new Error('油廊 no thick crate');
+  let youHound = 0;
+  let youGuard = 0;
+  let youMoth = 0;
+  for (let i = 0; i < you.enemies.length; i++) {
+    if (isHound(you.enemies[i])) youHound += 1;
+    else if (isMoth(you.enemies[i])) youMoth += 1;
+    else youGuard += 1;
+  }
+  if (youGuard !== 1 || youHound !== 1 || youMoth !== 0) throw new Error('油廊 烬卫/循辙');
+  if (inWater(you, 80, 200) || inOil(you, 80, 200)) throw new Error('油廊 spawn dry');
+  if (!inOil(you, 480, 200)) throw new Error('油廊 oil road');
+  if (inOil(you, 860, 188) || inWater(you, 860, 188)) throw new Error('油廊 core dry');
+  if (inOil(you, 400, 350) || !inWater(you, 450, 350)) throw new Error('油廊 wet bag');
+  for (let i = 0; i < you.crates.length; i++) {
+    const c = you.crates[i];
+    if (circleRect(you.player.x, you.player.y, you.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('油廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 540; x += 10) {
+    for (let i = 0; i < you.crates.length; i++) {
+      const c = you.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('油廊 crate on dry walk');
+      }
+    }
+  }
+  explode(you, yBox.x + yBox.w * 0.5, yBox.y - 20, false);
+  if (!yBox.open) throw new Error('油廊 dry trail should open 心核');
+  takeCore(you, { x: 100, y: 100 });
+  if (!you.won || you.toast !== TOAST.all) throw new Error('油廊 should 通关');
+  const hudYou = makeState();
+  resetRoom(hudYou, 15, false);
+  if (roomHudText(hudYou) !== '油廊 · 16/16') throw new Error('HUD 油廊 16/16');
 
   for (let r = 0; r < 14; r++) {
     const old = ROOMS[r].crates || [];
