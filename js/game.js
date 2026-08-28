@@ -14,6 +14,12 @@ const DASH_CD = 0.42;
 const ENEMY_R = 13;
 const ENEMY_SPEED = 48;
 const ENEMY_HP = 3;
+const HOUND_HP = 2;
+const HOUND_IDLE = 22;
+const HOUND_SEEK = 88;
+const HOUND_ROAD = 246;
+const HOUND_MOUNT = 70;
+const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八'];
 const HEART_MAX = 3;
 const HITSTOP = 0.08;
 const IFRAMES = 0.95;
@@ -28,6 +34,7 @@ const NAMES = {
   heal: '回星',
   water: '水洼',
   spark: '焰辙',
+  hound: '循辙',
   hint: '跑过的路两秒后会爆',
 };
 
@@ -49,6 +56,9 @@ const TOAST = {
   empty: '心空了',
   again: '再来',
   night: '夜市还亮着',
+  hound: '循辙倒了',
+  road: '循辙盯着你的路',
+  cut: '水能切断公路',
 };
 
 const COL = {
@@ -285,9 +295,85 @@ function resetRoom(s, index, keepHearts) {
     };
   });
   s.enemies = (room.enemies || []).map(function (e) {
-    return { x: e.x, y: e.y, r: ENEMY_R, hp: ENEMY_HP, hitT: 0 };
+    const kind = e.type || e.kind || NAMES.enemy;
+    const hound = kind === NAMES.hound;
+    return {
+      x: e.x, y: e.y,
+      r: hound ? 12 : ENEMY_R,
+      hp: hound ? HOUND_HP : ENEMY_HP,
+      hitT: 0,
+      kind: kind,
+      faceX: 1,
+      faceY: 0,
+    };
   });
   if (room.name === '夜市') toast(s, TOAST.night, 1.1, COL.gold);
+  else if (room.name === '循径') toast(s, TOAST.road, 1.1, COL.gold);
+  else if (room.name === '双刃') toast(s, TOAST.cut, 1.1, COL.water);
+}
+
+function isHound(e) {
+  return e.kind === NAMES.hound;
+}
+
+function liveRoad(s) {
+  const out = [];
+  for (let i = 0; i < s.sparks.length; i++) {
+    const k = s.sparks[i];
+    if (!k.dead && !k.wet) out.push(k);
+  }
+  return out;
+}
+
+function updateHound(s, e, dt) {
+  const p = s.player;
+  const road = liveRoad(s);
+  let tx = p.x;
+  let ty = p.y;
+  let speed = HOUND_IDLE;
+  if (road.length) {
+    let near = road[0];
+    let nd = dist(e.x, e.y, near.x, near.y);
+    for (let i = 1; i < road.length; i++) {
+      const dE = dist(e.x, e.y, road[i].x, road[i].y);
+      if (dE < nd) {
+        nd = dE;
+        near = road[i];
+      }
+    }
+    if (nd > HOUND_MOUNT) {
+      tx = near.x;
+      ty = near.y;
+      speed = HOUND_SEEK;
+    } else {
+      let step = near;
+      let stepP = dist(step.x, step.y, p.x, p.y);
+      for (let i = 0; i < road.length; i++) {
+        const k = road[i];
+        if (dist(e.x, e.y, k.x, k.y) > SPARK_GAP * 3.2) continue;
+        const dP = dist(k.x, k.y, p.x, p.y);
+        if (dP < stepP - 1) {
+          step = k;
+          stepP = dP;
+        }
+      }
+      if (stepP < 14) {
+        tx = p.x;
+        ty = p.y;
+      } else {
+        tx = step.x;
+        ty = step.y;
+      }
+      speed = HOUND_ROAD;
+    }
+  }
+  const d = dist(e.x, e.y, tx, ty);
+  if (d > 0.5) {
+    e.faceX = (tx - e.x) / d;
+    e.faceY = (ty - e.y) / d;
+    e.x += e.faceX * speed * dt;
+    e.y += e.faceY * speed * dt;
+  }
 }
 
 function dropSpark(s, x, y, hot) {
@@ -425,7 +511,7 @@ function explode(s, x, y, hot) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     if (dist(e.x, e.y, x, y) <= r + e.r) {
-      e.hp -= hot ? 2 : 1;
+      e.hp -= isHound(e) ? 1 : (hot ? 2 : 1);
       e.hitT = 0.18;
       const d = dist(e.x, e.y, x, y) || 1;
       e.x += ((e.x - x) / d) * 22;
@@ -435,7 +521,7 @@ function explode(s, x, y, hot) {
       hit = true;
       if (e.hp <= 0) {
         burst(s, e.x, e.y, 12, COL.ember, 140);
-        toast(s, TOAST.foe, 1.1, COL.ember);
+        toast(s, isHound(e) ? TOAST.hound : TOAST.foe, 1.1, COL.ember);
       }
     }
   }
@@ -629,9 +715,12 @@ function update(s, dt) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     if (e.hitT > 0) e.hitT -= dt;
-    const d = dist(e.x, e.y, p.x, p.y) || 1;
-    e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
-    e.y += ((p.y - e.y) / d) * ENEMY_SPEED * dt;
+    if (isHound(e)) updateHound(s, e, dt);
+    else {
+      const d = dist(e.x, e.y, p.x, p.y) || 1;
+      e.x += ((p.x - e.x) / d) * ENEMY_SPEED * dt;
+      e.y += ((p.y - e.y) / d) * ENEMY_SPEED * dt;
+    }
     resolveCrates(s, e);
     e.x = clamp(e.x, e.r, rw - e.r);
     e.y = clamp(e.y, e.r, rh - e.r);
@@ -826,6 +915,38 @@ function draw(s, ctx) {
     const e = s.enemies[i];
     if (e.hp <= 0) continue;
     const flash = e.hitT > 0;
+    if (isHound(e)) {
+      glow(ctx, e.x, e.y, 24, COL.gold, 0.22);
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.rotate(Math.atan2(e.faceY || 0, e.faceX || 1));
+      ctx.beginPath();
+      ctx.fillStyle = flash ? COL.gold : '#5a2a12';
+      ctx.moveTo(14, 0);
+      ctx.lineTo(-9, 8);
+      ctx.lineTo(-5, 0);
+      ctx.lineTo(-9, -8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = COL.ember;
+      ctx.lineWidth = 2 / fit.scale;
+      ctx.stroke();
+      ctx.fillStyle = COL.gold;
+      ctx.beginPath();
+      ctx.arc(3, -2.4, 1.6, 0, Math.PI * 2);
+      ctx.arc(3, 2.4, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = COL.gold;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.hound, e.x, e.y + e.r + 12);
+      for (let h = 0; h < HOUND_HP; h++) {
+        ctx.fillStyle = h < e.hp ? COL.gold : 'rgba(255,210,74,0.2)';
+        ctx.fillRect(e.x - 9 + h * 10, e.y + e.r + 14, 8, 3);
+      }
+      continue;
+    }
     glow(ctx, e.x, e.y, 22, COL.ember, 0.18);
     ctx.beginPath();
     ctx.fillStyle = flash ? COL.gold : '#2a1410';
@@ -1023,7 +1144,12 @@ function screenToWorld(canvas, cx, cy, s) {
 
 function syncHud(s, heartsEl, toastEl, roomEl) {
   heartsEl.textContent = '心×' + s.player.hearts;
-  if (roomEl) roomEl.textContent = s.roomName || '';
+  if (roomEl) {
+    const n = ensureRooms().length;
+    const a = CN_NUM[s.roomIndex] || String(s.roomIndex + 1);
+    const b = CN_NUM[n - 1] || String(n);
+    roomEl.textContent = (s.roomName || '') + ' · ' + a + '/' + b;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -1093,9 +1219,9 @@ function boot() {
 function selfCheck() {
   ensureRooms();
   if (TAIL_T !== 2) throw new Error('TAIL_T must be 2');
-  if (!ROOMS || ROOMS.length !== 6) throw new Error('need 6 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市'];
-  for (let i = 0; i < 6; i++) {
+  if (!ROOMS || ROOMS.length !== 8) throw new Error('need 8 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃'];
+  for (let i = 0; i < 8; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
     }
@@ -1112,7 +1238,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '焰辙', '循辙'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -1129,7 +1255,16 @@ function selfCheck() {
     '\u5929\u4f7f',
     '\u6076\u9b54',
   ];
-  const scan = blob + NAMES.hint + '尾火过关失败通关' + want.join('');
+  if (NAMES.hound !== '循辙') throw new Error('循辙 exists');
+  let houndN = 0;
+  for (let r = 0; r < ROOMS.length; r++) {
+    const ens = ROOMS[r].enemies || [];
+    for (let j = 0; j < ens.length; j++) {
+      if ((ens[j].type || ens[j].kind) === '循辙') houndN += 1;
+    }
+  }
+  if (houndN < 1) throw new Error('循辙 exists');
+  const scan = blob + NAMES.hint + '尾火过关失败通关循辙倒了' + want.join('');
   for (let i = 0; i < banned.length; i++) {
     if (scan.indexOf(banned[i]) >= 0) throw new Error('banned');
   }
@@ -1175,12 +1310,49 @@ function selfCheck() {
   resetRoom(lane, 4, false);
   if (lane.roomName !== '夹道' || lane.roomH !== 140) throw new Error('jiadao load');
 
+  const houndIdle = makeState();
+  resetRoom(houndIdle, 6, false);
+  if (houndIdle.roomName !== '循径') throw new Error('room 6 循径');
+  const hi = houndIdle.enemies.find(function (e) { return isHound(e); });
+  if (!hi || hi.hp !== 2) throw new Error('循径 needs 循辙');
+  const idleX = hi.x;
+  const idleY = hi.y;
+  for (let i = 0; i < 20; i++) update(houndIdle, 0.05);
+  const idleD = dist(hi.x, hi.y, idleX, idleY);
+
+  const houndRun = makeState();
+  resetRoom(houndRun, 6, false);
+  const hr = houndRun.enemies.find(function (e) { return isHound(e); });
+  const runX = hr.x;
+  const runY = hr.y;
+  const steps = 14;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    dropSpark(
+      houndRun,
+      runX + (houndRun.player.x - runX) * t,
+      runY + (houndRun.player.y - runY) * t,
+      false
+    );
+  }
+  for (let i = 0; i < 20; i++) update(houndRun, 0.05);
+  const roadD = dist(hr.x, hr.y, runX, runY);
+  if (roadD <= idleD + 10) throw new Error('循辙 should run the trail');
+
+  const twoHit = makeState();
+  resetRoom(twoHit, 6, false);
+  const hk = twoHit.enemies.find(function (e) { return isHound(e); });
+  explode(twoHit, hk.x, hk.y, true);
+  if (hk.hp !== 1) throw new Error('循辙 any blast is 1');
+  explode(twoHit, hk.x, hk.y, false);
+  if (hk.hp > 0) throw new Error('循辙 dies in 2 blasts');
+
   const last = makeState();
-  resetRoom(last, 5, false);
-  if (last.roomName !== '夜市') throw new Error('yeshi load');
-  last.roomIndex = 5;
+  resetRoom(last, 7, false);
+  if (last.roomName !== '双刃') throw new Error('shuangren load');
+  last.roomIndex = 7;
   takeCore(last, { x: 100, y: 100 });
-  if (!last.won || last.toast !== TOAST.all) throw new Error('yeshi should 通关');
+  if (!last.won || last.toast !== TOAST.all) throw new Error('双刃 should 通关');
 
   const mid = makeState();
   resetRoom(mid, 0, false);
