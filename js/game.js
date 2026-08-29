@@ -87,6 +87,11 @@ const WING_X = 150;
 const WING_R = 70;
 const WING_WAVES = 3;
 const WING_DT = 0.10;
+const MOON_N = 5;
+const MOON_X = 150;
+const MOON_R = 90;
+const MOON_WAVES = 3;
+const MOON_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -188,6 +193,7 @@ const NAMES = {
   gate: '门爆',
   arch: '拱爆',
   wing: '翼爆',
+  moon: '月爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -337,6 +343,9 @@ const TOAST = {
   wingGet: '捡到翼爆',
   wingUse: '双翼张开了',
   wingRoom: '双翼清场',
+  moonGet: '捡到月爆',
+  moonUse: '月牙出来了',
+  moonRoom: '月牙清场',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -385,6 +394,7 @@ const COL = {
   gate: '#ffb347',
   arch: '#7ecbff',
   wing: '#ff7a3c',
+  moon: '#a8d0ff',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -651,6 +661,7 @@ function lootKind(drop) {
   if (drop === '门爆' || drop === 'gate') return 'gate';
   if (drop === '拱爆' || drop === 'arch') return 'arch';
   if (drop === '翼爆' || drop === 'wing') return 'wing';
+  if (drop === '月爆' || drop === 'moon') return 'moon';
   return null;
 }
 
@@ -734,6 +745,7 @@ function makeState() {
     gateReady: false,
     archReady: false,
     wingReady: false,
+    moonReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -756,6 +768,7 @@ function makeState() {
     gates: [],
     arches: [],
     wings: [],
+    moons: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -889,6 +902,7 @@ function resetRoom(s, index, keepHearts) {
   s.gateReady = false;
   s.archReady = false;
   s.wingReady = false;
+  s.moonReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -943,6 +957,8 @@ function resetRoom(s, index, keepHearts) {
   s.arches.length = 0;
   if (!s.wings) s.wings = [];
   s.wings.length = 0;
+  if (!s.moons) s.moons = [];
+  s.moons.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -1073,6 +1089,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '门廊') toast(s, TOAST.gateRoom, 1.4, COL.gate);
   else if (room.name === '拱廊') toast(s, TOAST.archRoom, 1.4, COL.arch);
   else if (room.name === '翼廊') toast(s, TOAST.wingRoom, 1.4, COL.wing);
+  else if (room.name === '月廊') toast(s, TOAST.moonRoom, 1.4, COL.moon);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -2017,6 +2034,32 @@ function updateWings(s, dt) {
   }
 }
 
+function updateMoons(s, dt) {
+  if (!s.moons || !s.moons.length) return;
+  const fires = [];
+  for (let i = s.moons.length - 1; i >= 0; i--) {
+    const p = s.moons[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.moons.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.moon, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.moon, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -2249,6 +2292,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.wingReady) {
     s.wingReady = false;
     winging = true;
+  }
+  let mooning = false;
+  if (!forked && s.moonReady) {
+    s.moonReady = false;
+    mooning = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -2992,6 +3040,28 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, '#ffffff', 160);
     }
   }
+  if (mooning) {
+    if (!s.moons) s.moons = [];
+    for (let w = 0; w < MOON_WAVES; w++) {
+      for (let k = 0; k < MOON_N; k++) {
+        const th = 2 * Math.PI / 3 - k * Math.PI / 3;
+        s.moons.push({
+          x: Math.round((x + MOON_X) + MOON_R * Math.cos(th)),
+          y: Math.round(y - MOON_R * Math.sin(th)),
+          t: MOON_DT * (w * MOON_N + k + 1),
+          ox: x,
+          oy: y,
+        });
+      }
+    }
+    toast(s, TOAST.moonUse, 1.1, COL.moon);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.moon, 170);
+      burst(s, x, y, 4, '#ffffff', 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -3275,6 +3345,7 @@ function watchSteer(s, dt) {
   let gateIt = null;
   let archIt = null;
   let wingIt = null;
+  let moonIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -3312,8 +3383,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'gate') gateIt = it;
     if (it.kind === 'arch') archIt = it;
     if (it.kind === 'wing') wingIt = it;
+    if (it.kind === 'moon') moonIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3483,6 +3555,10 @@ function watchSteer(s, dt) {
   } else if (!s.wingReady && wingIt) {
     tx = wingIt.x - p.x;
     ty = wingIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.moonReady && moonIt) {
+    tx = moonIt.x - p.x;
+    ty = moonIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3674,6 +3750,7 @@ function update(s, dt) {
     updateGates(s, dt);
     updateArches(s, dt);
     updateWings(s, dt);
+    updateMoons(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3706,6 +3783,7 @@ function update(s, dt) {
     updateGates(s, dt);
     updateArches(s, dt);
     updateWings(s, dt);
+    updateMoons(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3830,6 +3908,7 @@ function update(s, dt) {
   updateGates(s, dt);
   updateArches(s, dt);
   updateWings(s, dt);
+  updateMoons(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -4100,6 +4179,13 @@ function update(s, dt) {
       toast(s, TOAST.wingGet, 1.1, COL.wing);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.wing, 130);
+      burst(s, it.x, it.y, 4, '#ffffff', 110);
+      punch(s, 3);
+    } else if (it.kind === 'moon') {
+      s.moonReady = true;
+      toast(s, TOAST.moonGet, 1.1, COL.moon);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.moon, 130);
       burst(s, it.x, it.y, 4, '#ffffff', 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -4977,6 +5063,22 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.wing, it.x, it.y - 16);
+    } else if (it.kind === 'moon') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.moon, 0.7);
+      glow(ctx, it.x, it.y, 8, '#ffffff', 0.35);
+      ctx.fillStyle = COL.moon;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.arc(it.x + 1.2, it.y, 4.4, -Math.PI * 0.7, Math.PI * 0.7, false);
+      ctx.stroke();
+      ctx.fillStyle = COL.moon;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.moon, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -5796,6 +5898,44 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('翼', p.x, p.y - 12);
+    }
+  }
+
+  if (s.moons && s.moons.length) {
+    for (let i = 0; i < s.moons.length; i++) {
+      const p = s.moons[i];
+      const maxT = MOON_DT * MOON_WAVES * MOON_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.moon, 0.28);
+      ctx.strokeStyle = COL.moon;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p.x + 1.2, p.y, 6, -Math.PI * 0.7, Math.PI * 0.7, false);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.moon;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.moon;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('月', p.x, p.y - 12);
     }
   }
 
@@ -6805,6 +6945,28 @@ function draw(s, ctx) {
     ctx.arc(wx + 1.4, wy, 2.2, -Math.PI * 0.65, Math.PI * 0.65, false);
     ctx.stroke();
   }
+  if (s.moonReady) {
+    let mx;
+    let my;
+    if (reducedMotion()) {
+      mx = p.x - 14;
+      my = p.y - 4;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15 + Math.PI * 5.4 + Math.PI * 5.65 + Math.PI * 5.9 + Math.PI * 6.15 + Math.PI * 6.4 + Math.PI * 6.65;
+      mx = p.x + Math.cos(a) * 16;
+      my = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, mx, my, 8, COL.moon, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.moon;
+    ctx.arc(mx, my, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.arc(mx + 0.8, my, 2.2, -Math.PI * 0.7, Math.PI * 0.7, false);
+    ctx.stroke();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -7281,6 +7443,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (gateEl && s.wingReady && !s.gateReady) {
     gateEl.textContent = NAMES.wing;
   }
+  const moonEl = (typeof document !== 'undefined') ? document.getElementById('moon') : null;
+  if (moonEl) {
+    moonEl.textContent = s.moonReady ? NAMES.moon : '';
+  } else if (wingEl && s.moonReady && !s.wingReady) {
+    wingEl.textContent = NAMES.moon;
+  } else if (archEl && s.moonReady && !s.archReady) {
+    archEl.textContent = NAMES.moon;
+  } else if (gateEl && s.moonReady && !s.gateReady) {
+    gateEl.textContent = NAMES.moon;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -7450,10 +7622,15 @@ function selfCheck() {
   if (WING_R !== 70) throw new Error('WING_R 70');
   if (WING_WAVES !== 3) throw new Error('WING_WAVES 3');
   if (WING_DT !== 0.10) throw new Error('WING_DT 0.10');
+  if (MOON_N !== 5) throw new Error('MOON_N 5');
+  if (MOON_X !== 150) throw new Error('MOON_X 150');
+  if (MOON_R !== 90) throw new Error('MOON_R 90');
+  if (MOON_WAVES !== 3) throw new Error('MOON_WAVES 3');
+  if (MOON_DT !== 0.10) throw new Error('MOON_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 51) throw new Error('need 51 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊'];
+  if (!ROOMS || ROOMS.length !== 52) throw new Error('need 52 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -7545,6 +7722,8 @@ function selfCheck() {
   if (ROOMS[49].name !== '拱廊') throw new Error('room 50 拱廊');
   if (ROOMS[50].id !== 'yilang') throw new Error('翼廊 id');
   if (ROOMS[50].name !== '翼廊') throw new Error('room 51 翼廊');
+  if (ROOMS[51].id !== 'yuelang') throw new Error('月廊 id');
+  if (ROOMS[51].name !== '月廊') throw new Error('room 52 月廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -7603,6 +7782,9 @@ function selfCheck() {
   if (NAMES.wing !== '翼爆') throw new Error('NAMES.wing');
   if (COL.wing !== '#ff7a3c') throw new Error('COL.wing');
   if (lootKind('翼爆') !== 'wing' || lootKind('wing') !== 'wing') throw new Error('lootKind 翼爆');
+  if (NAMES.moon !== '月爆') throw new Error('NAMES.moon');
+  if (COL.moon !== '#a8d0ff') throw new Error('COL.moon');
+  if (lootKind('月爆') !== 'moon' || lootKind('moon') !== 'moon') throw new Error('lootKind 月爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -9168,6 +9350,7 @@ function selfCheck() {
   if (lootKind('门爆') !== 'gate' || lootKind('gate') !== 'gate') throw new Error('lootKind 门爆');
   if (lootKind('拱爆') !== 'arch' || lootKind('arch') !== 'arch') throw new Error('lootKind 拱爆');
   if (lootKind('翼爆') !== 'wing' || lootKind('wing') !== 'wing') throw new Error('lootKind 翼爆');
+  if (lootKind('月爆') !== 'moon' || lootKind('moon') !== 'moon') throw new Error('lootKind 月爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -14625,6 +14808,7 @@ function selfCheck() {
   bothP.gateReady = true;
   bothP.archReady = true;
   bothP.wingReady = true;
+  bothP.moonReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -14643,6 +14827,7 @@ function selfCheck() {
   if (bothP.gateReady) throw new Error('same boom spends 门爆');
   if (bothP.archReady) throw new Error('same boom spends 拱爆');
   if (bothP.wingReady) throw new Error('same boom spends 翼爆');
+  if (bothP.moonReady) throw new Error('same boom spends 月爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -14657,6 +14842,7 @@ function selfCheck() {
   if (!bothP.gates || bothP.gates.length !== GATE_N) throw new Error('same boom gates');
   if (!bothP.arches || bothP.arches.length !== ARCH_WAVES * ARCH_N) throw new Error('same boom arches');
   if (!bothP.wings || bothP.wings.length !== WING_WAVES * WING_N * 2) throw new Error('same boom wings');
+  if (!bothP.moons || bothP.moons.length !== MOON_WAVES * MOON_N) throw new Error('same boom moons');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -17584,6 +17770,12 @@ function selfCheck() {
   men.hitstop = 0;
   updateWings(men, WING_DT * WING_WAVES * WING_N * 2 + 0.05);
   if (men.gateReady !== true) throw new Error('门廊 wing-seat does not consume');
+  men.moonReady = true;
+  explode(men, 200, 200, false);
+  men.gateReady = true;
+  men.hitstop = 0;
+  updateMoons(men, MOON_DT * MOON_WAVES * MOON_N + 0.05);
+  if (men.gateReady !== true) throw new Error('门廊 moon-seat does not consume');
   men.waters = [];
   explode(men, menBox.x + menBox.w * 0.5, menBox.y - 20, false);
   if (!menBox.open) throw new Error('门廊 dry trail should open 心核');
@@ -17951,6 +18143,12 @@ function selfCheck() {
   gong.hitstop = 0;
   updateWings(gong, WING_DT * WING_WAVES * WING_N * 2 + 0.05);
   if (gong.archReady !== true) throw new Error('拱廊 wing-seat does not consume');
+  gong.moonReady = true;
+  explode(gong, 200, 200, false);
+  gong.archReady = true;
+  gong.hitstop = 0;
+  updateMoons(gong, MOON_DT * MOON_WAVES * MOON_N + 0.05);
+  if (gong.archReady !== true) throw new Error('拱廊 moon-seat does not consume');
   gong.waters = [];
   explode(gong, gongBox.x + gongBox.w * 0.5, gongBox.y - 20, false);
   if (!gongBox.open) throw new Error('拱廊 dry trail should open 心核');
@@ -18002,6 +18200,7 @@ function selfCheck() {
   let yiCrossItem = 0;
   let yiStarItem = 0;
   let yiWaveItem = 0;
+  let yiMoonItem = 0;
   for (let i = 0; i < yi.crates.length; i++) {
     if (yi.crates[i].loot === 'core') yiCore += 1;
     if (yi.crates[i].loot === 'heal') yiHeal += 1;
@@ -18017,9 +18216,10 @@ function selfCheck() {
     if (yi.items[i].kind === 'cross') yiCrossItem += 1;
     if (yi.items[i].kind === 'star') yiStarItem += 1;
     if (yi.items[i].kind === 'wave') yiWaveItem += 1;
+    if (yi.items[i].kind === 'moon') yiMoonItem += 1;
   }
   if (yiWingItem < 1) throw new Error('翼廊 needs 翼爆');
-  if (yiArchItem || yiGateItem || yiCurtainItem || yiCoilItem || yiFrameItem || yiCrossItem || yiStarItem || yiWaveItem) throw new Error('翼廊 no extra pickup');
+  if (yiArchItem || yiGateItem || yiCurtainItem || yiCoilItem || yiFrameItem || yiCrossItem || yiStarItem || yiWaveItem || yiMoonItem) throw new Error('翼廊 no extra pickup');
   if (yiCore !== 1) throw new Error('翼廊 心核');
   if (yiHeal < 1) throw new Error('翼廊 回星');
   const yiBox = yi.crates.find(function (c) { return c.loot === 'core'; });
@@ -18325,6 +18525,12 @@ function selfCheck() {
   yi.hitstop = 0;
   updateArches(yi, ARCH_DT * ARCH_WAVES * ARCH_N + 0.05);
   if (yi.wingReady !== true) throw new Error('翼廊 arch-seat does not consume');
+  yi.moonReady = true;
+  explode(yi, 200, 200, false);
+  yi.wingReady = true;
+  yi.hitstop = 0;
+  updateMoons(yi, MOON_DT * MOON_WAVES * MOON_N + 0.05);
+  if (yi.wingReady !== true) throw new Error('翼廊 moon-seat does not consume');
   yi.spinReady = true;
   explode(yi, 200, 200, false);
   yi.wingReady = true;
@@ -18335,7 +18541,10 @@ function selfCheck() {
   explode(yi, yiBox.x + yiBox.w * 0.5, yiBox.y - 20, false);
   if (!yiBox.open) throw new Error('翼廊 dry trail should open 心核');
   takeCore(yi, { x: 100, y: 100 });
-  if (!yi.won || yi.toast !== TOAST.all) throw new Error('翼廊 should 通关');
+  if (yi.won) throw new Error('翼廊 should not 通关');
+  if (yi.toast !== TOAST.core) throw new Error('翼廊 过关');
+  for (let i = 0; i < 20; i++) update(yi, 0.1);
+  if (yi.roomName !== '月廊') throw new Error('core advances to 月廊');
   const hudYi = makeState();
   resetRoom(hudYi, 50, false);
   if (roomHudText(hudYi).indexOf('翼廊 · 51/') !== 0) throw new Error('HUD 翼廊 51/n');
@@ -18351,6 +18560,379 @@ function selfCheck() {
   if (TOAST.wingGet !== '捡到翼爆') throw new Error('捡到翼爆');
   if (TOAST.wingUse !== '双翼张开了') throw new Error('双翼张开了 toast');
   if (TOAST.wingRoom !== '双翼清场') throw new Error('双翼清场');
+
+  const yue = makeState();
+  resetRoom(yue, 51, false);
+  if (yue.roomName !== '月廊' || yue.roomId !== 'yuelang') throw new Error('yuelang load');
+  if (yue.toast !== TOAST.moonRoom) throw new Error('月廊 intro');
+  if (yue.roomW !== 960 || yue.roomH !== 400) throw new Error('月廊 size');
+  if (yue.player.x !== 80 || yue.player.y !== 200) throw new Error('月廊 spawn');
+  if (yue.moonReady) throw new Error('月廊 moon starts false');
+  if (!yue.moons || yue.moons.length) throw new Error('月廊 moons start empty');
+  let yueStill = 0;
+  let yueTide = 0;
+  for (let i = 0; i < yue.waters.length; i++) {
+    if (yue.waters[i].tide) yueTide += 1;
+    else yueStill += 1;
+  }
+  if (yueStill < 1) throw new Error('月廊 needs static 水洼');
+  if (yueTide) throw new Error('月廊 no tide');
+  let yueCore = 0;
+  let yueHeal = 0;
+  let yueThick = 0;
+  let yueMoonItem = 0;
+  let yueWingItem = 0;
+  let yueArchItem = 0;
+  let yueGateItem = 0;
+  let yueCurtainItem = 0;
+  let yueCoilItem = 0;
+  let yueFrameItem = 0;
+  let yueCrossItem = 0;
+  let yueStarItem = 0;
+  let yueWaveItem = 0;
+  for (let i = 0; i < yue.crates.length; i++) {
+    if (yue.crates[i].loot === 'core') yueCore += 1;
+    if (yue.crates[i].loot === 'heal') yueHeal += 1;
+    if (yue.crates[i].thick) yueThick += 1;
+  }
+  for (let i = 0; i < yue.items.length; i++) {
+    if (yue.items[i].kind === 'moon') yueMoonItem += 1;
+    if (yue.items[i].kind === 'wing') yueWingItem += 1;
+    if (yue.items[i].kind === 'arch') yueArchItem += 1;
+    if (yue.items[i].kind === 'gate') yueGateItem += 1;
+    if (yue.items[i].kind === 'curtain') yueCurtainItem += 1;
+    if (yue.items[i].kind === 'coil') yueCoilItem += 1;
+    if (yue.items[i].kind === 'frame') yueFrameItem += 1;
+    if (yue.items[i].kind === 'cross') yueCrossItem += 1;
+    if (yue.items[i].kind === 'star') yueStarItem += 1;
+    if (yue.items[i].kind === 'wave') yueWaveItem += 1;
+  }
+  if (yueMoonItem < 1) throw new Error('月廊 needs 月爆');
+  if (yueWingItem || yueArchItem || yueGateItem || yueCurtainItem || yueCoilItem || yueFrameItem || yueCrossItem || yueStarItem || yueWaveItem) throw new Error('月廊 no extra pickup');
+  if (yueCore !== 1) throw new Error('月廊 心核');
+  if (yueHeal < 1) throw new Error('月廊 回星');
+  const yueBox = yue.crates.find(function (c) { return c.loot === 'core'; });
+  if (!yueBox || yueBox.thick) throw new Error('月廊 心核 crate is not thick');
+  if (yueThick) throw new Error('月廊 no thick crate');
+  let yueHound = 0;
+  let yueGuard = 0;
+  let yueMoth = 0;
+  let yueEater = 0;
+  let yueShell = 0;
+  let yueBoomer = 0;
+  for (let i = 0; i < yue.enemies.length; i++) {
+    if (isHound(yue.enemies[i])) yueHound += 1;
+    else if (isMoth(yue.enemies[i])) yueMoth += 1;
+    else if (isEater(yue.enemies[i])) yueEater += 1;
+    else if (isShell(yue.enemies[i])) yueShell += 1;
+    else if (isBoomer(yue.enemies[i])) yueBoomer += 1;
+    else yueGuard += 1;
+  }
+  if (yueGuard !== 5 || yueHound !== 0 || yueMoth !== 0 || yueEater !== 0 || yueShell !== 0 || yueBoomer !== 0) {
+    throw new Error('月廊 烬卫 only');
+  }
+  if (inWater(yue, 80, 200) || inOil(yue, 80, 200)) throw new Error('月廊 spawn dry');
+  if (inWater(yue, 110, 200) || inOil(yue, 110, 200)) throw new Error('月廊 月爆 dry');
+  if (inWater(yue, 400, 200) || inOil(yue, 400, 200)) throw new Error('月廊 plant dry');
+  if (inOil(yue, 820, 200) || inWater(yue, 820, 200)) throw new Error('月廊 core dry');
+  if (inWater(yue, 505, 122) || inOil(yue, 505, 122)) throw new Error('月廊 烬卫 dry 0');
+  if (inWater(yue, 595, 122) || inOil(yue, 595, 122)) throw new Error('月廊 烬卫 dry 1');
+  if (inWater(yue, 640, 200) || inOil(yue, 640, 200)) throw new Error('月廊 烬卫 dry 2');
+  if (inWater(yue, 595, 278) || inOil(yue, 595, 278)) throw new Error('月廊 烬卫 dry 3');
+  if (inWater(yue, 505, 278) || inOil(yue, 505, 278)) throw new Error('月廊 烬卫 dry 4');
+  if (!inWater(yue, 770, 365)) throw new Error('月廊 wet bag');
+  if (inWater(yue, 80, 200)) throw new Error('月廊 west pocket wet');
+  for (let i = 0; i < yue.crates.length; i++) {
+    const c = yue.crates[i];
+    if (circleRect(yue.player.x, yue.player.y, yue.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('月廊 crate on spawn');
+    }
+  }
+  for (let x = 80; x <= 400; x += 10) {
+    for (let i = 0; i < yue.crates.length; i++) {
+      const c = yue.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('月廊 crate on dry walk');
+      }
+    }
+  }
+  const yue0 = yue.enemies.find(function (e) { return Math.abs(e.x - 505) < 1 && Math.abs(e.y - 122) < 1; });
+  const yue1 = yue.enemies.find(function (e) { return Math.abs(e.x - 595) < 1 && Math.abs(e.y - 122) < 1; });
+  const yue2 = yue.enemies.find(function (e) { return Math.abs(e.x - 640) < 1 && Math.abs(e.y - 200) < 1; });
+  const yue3 = yue.enemies.find(function (e) { return Math.abs(e.x - 595) < 1 && Math.abs(e.y - 278) < 1; });
+  const yue4 = yue.enemies.find(function (e) { return Math.abs(e.x - 505) < 1 && Math.abs(e.y - 278) < 1; });
+  if (!yue0 || !yue1 || !yue2 || !yue3 || !yue4) throw new Error('月廊 five 烬卫 seats');
+  const yueSeats = [yue0, yue1, yue2, yue3, yue4];
+  for (let i = 0; i < yueSeats.length; i++) {
+    const e = yueSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('月廊 primary misses 烬卫');
+    if (e.x < 40 || e.y < 40 || e.x > 960 - 40 || e.y > 400 - 40) throw new Error('月廊 烬卫 margin');
+  }
+  const moonSeatPos = [];
+  for (let k = 0; k < MOON_N; k++) {
+    const th = 2 * Math.PI / 3 - k * Math.PI / 3;
+    moonSeatPos.push([
+      Math.round((400 + MOON_X) + MOON_R * Math.cos(th)),
+      Math.round(200 - MOON_R * Math.sin(th)),
+    ]);
+  }
+  if (Math.abs(moonSeatPos[0][0] - 505) > 1e-6 || Math.abs(moonSeatPos[0][1] - 122) > 1e-6) throw new Error('moon formula 0');
+  if (Math.abs(moonSeatPos[1][0] - 595) > 1e-6 || Math.abs(moonSeatPos[1][1] - 122) > 1e-6) throw new Error('moon formula 1');
+  if (Math.abs(moonSeatPos[2][0] - 640) > 1e-6 || Math.abs(moonSeatPos[2][1] - 200) > 1e-6) throw new Error('moon formula 2');
+  if (Math.abs(moonSeatPos[3][0] - 595) > 1e-6 || Math.abs(moonSeatPos[3][1] - 278) > 1e-6) throw new Error('moon formula 3');
+  if (Math.abs(moonSeatPos[4][0] - 505) > 1e-6 || Math.abs(moonSeatPos[4][1] - 278) > 1e-6) throw new Error('moon formula 4');
+  for (let i = 0; i < yueSeats.length; i++) {
+    const e = yueSeats[i];
+    let hit = false;
+    for (let k = 0; k < moonSeatPos.length; k++) {
+      if (dist(e.x, e.y, moonSeatPos[k][0], moonSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('月廊 hot moon reaches 烬卫');
+  }
+  const yueGround = yue.items.find(function (it) { return it.kind === 'moon' && !it.taken; });
+  if (!yueGround) throw new Error('月廊 ground 月爆 present');
+  if (Math.abs(yueGround.x - 110) > 1e-6 || Math.abs(yueGround.y - 200) > 1e-6) throw new Error('月廊 pickup seat');
+  let yuePickGuard = 1e9;
+  for (let i = 0; i < yueSeats.length; i++) {
+    const d = dist(yueGround.x, yueGround.y, yueSeats[i].x, yueSeats[i].y);
+    if (d < yuePickGuard) yuePickGuard = d;
+  }
+  if (yuePickGuard <= HOT_BLAST_R + ENEMY_R) throw new Error('月廊 pickup too close to seat');
+  const yueCoreCx = yueBox.x + yueBox.w * 0.5;
+  const yueCoreCy = yueBox.y + yueBox.h * 0.5;
+  if (!(dist(yueCoreCx, yueCoreCy, 400, 200) > HOT_BLAST_R)) throw new Error('月廊 core outside plant blast');
+  if (!(dist(yueCoreCx, yueCoreCy, 640, 200) > HOT_BLAST_R)) throw new Error('月廊 core outside east seat');
+  yue.player.x = 80;
+  yue.player.y = 200;
+  yue.player.hearts = 3;
+  yue.player.inv = 2;
+  yue.hitstop = 0;
+  yue.embers.length = 0;
+  yue.player.x = yueGround.x;
+  yue.player.y = yueGround.y;
+  update(yue, 0.016);
+  if (yue.moonReady !== true) throw new Error('pick moon → moonReady');
+  if (yue.toast !== TOAST.moonGet) throw new Error('捡到月爆 room');
+  yue.player.x = 80;
+  yue.player.y = 200;
+  yue.player.inv = 2;
+  yue.hitstop = 0;
+  yue.embers.length = 0;
+  const yueHp0 = yue0.hp;
+  const yueHp1 = yue1.hp;
+  const yueHp2 = yue2.hp;
+  const yueHp3 = yue3.hp;
+  const yueHp4 = yue4.hp;
+  explode(yue, 400, 200, false);
+  if (yue.moonReady) throw new Error('月廊 moon spends');
+  if (yue.toast !== TOAST.moonUse) throw new Error('月牙出来了 room');
+  if (!yue.moons || yue.moons.length !== MOON_WAVES * MOON_N) throw new Error('月廊 moons queued');
+  if (Math.abs(yue.moons[0].x - 505) > 1e-6 || Math.abs(yue.moons[0].y - 122) > 1e-6) throw new Error('月廊 seat 0');
+  if (Math.abs(yue.moons[1].x - 595) > 1e-6 || Math.abs(yue.moons[1].y - 122) > 1e-6) throw new Error('月廊 seat 1');
+  if (Math.abs(yue.moons[2].x - 640) > 1e-6 || Math.abs(yue.moons[2].y - 200) > 1e-6) throw new Error('月廊 seat 2');
+  if (Math.abs(yue.moons[3].x - 595) > 1e-6 || Math.abs(yue.moons[3].y - 278) > 1e-6) throw new Error('月廊 seat 3');
+  if (Math.abs(yue.moons[4].x - 505) > 1e-6 || Math.abs(yue.moons[4].y - 278) > 1e-6) throw new Error('月廊 seat 4');
+  if (Math.abs(yue.moons[5].x - 505) > 1e-6 || Math.abs(yue.moons[5].y - 122) > 1e-6) throw new Error('月廊 seat 5');
+  if (Math.abs(yue.moons[10].x - 505) > 1e-6 || Math.abs(yue.moons[10].y - 122) > 1e-6) throw new Error('月廊 seat 10');
+  if (Math.abs(yue.moons[0].t - MOON_DT) > 1e-6) throw new Error('月廊 dt 1');
+  if (Math.abs(yue.moons[1].t - MOON_DT * 2) > 1e-6) throw new Error('月廊 dt 2');
+  if (Math.abs(yue.moons[14].t - MOON_DT * 15) > 1e-6) throw new Error('月廊 dt 15');
+  if (yue0.hp !== yueHp0 || yue1.hp !== yueHp1 || yue2.hp !== yueHp2 || yue3.hp !== yueHp3 || yue4.hp !== yueHp4) {
+    throw new Error('月廊 primary misses');
+  }
+  yue.hitstop = 0;
+  updateMoons(yue, MOON_DT + 0.01);
+  if (yue.moons.length !== 14) throw new Error('月廊 first moon 0');
+  if (!(yue0.hp === yueHp0 - 2 || yue0.hp <= 0)) throw new Error('月廊 0 first seat');
+  yue0.x = 505;
+  yue0.y = 122;
+  yue1.x = 595;
+  yue1.y = 122;
+  yue2.x = 640;
+  yue2.y = 200;
+  yue3.x = 595;
+  yue3.y = 278;
+  yue4.x = 505;
+  yue4.y = 278;
+  yue.hitstop = 0;
+  updateMoons(yue, MOON_DT * 14 + 0.05);
+  if (yue.moons.length !== 0) throw new Error('月廊 moons finish');
+  if (yue0.hp > 0) throw new Error('月廊 moon dmg 0');
+  if (yue1.hp > 0) throw new Error('月廊 moon dmg 1');
+  if (yue2.hp > 0) throw new Error('月廊 moon dmg 2');
+  if (yue3.hp > 0) throw new Error('月廊 moon dmg 3');
+  if (yue4.hp > 0) throw new Error('月廊 moon dmg 4');
+  yue.moonReady = true;
+  dropSpark(yue, 200, 200, false);
+  if (yue.moonReady !== true) throw new Error('dropSpark keeps 月爆');
+  yue.input.dash = true;
+  yue.player.dashT = 0;
+  yue.player.dashCd = 0;
+  yue.hitstop = 0;
+  update(yue, 0.016);
+  if (yue.moonReady !== true) throw new Error('dash does not consume 月爆');
+  const moonSelf = makeState();
+  resetRoom(moonSelf, 0, false);
+  moonSelf.moonReady = true;
+  moonSelf.player.x = 505;
+  moonSelf.player.y = 122;
+  moonSelf.player.inv = 0;
+  moonSelf.player.hearts = 3;
+  explode(moonSelf, 400, 200, false);
+  if (moonSelf.player.hearts !== 3) throw new Error('primary dry misses player for moon');
+  moonSelf.hitstop = 0;
+  updateMoons(moonSelf, MOON_DT + 0.01);
+  if (moonSelf.player.hearts !== 2) throw new Error('own moon hurts player');
+  moonSelf.player.hearts = 3;
+  moonSelf.player.inv = 0;
+  moonSelf.player.dashT = DASH_TIME;
+  moonSelf.moons = [{ x: 505, y: 122, t: 0, ox: 400, oy: 200 }];
+  moonSelf.hitstop = 0;
+  updateMoons(moonSelf, 0.02);
+  if (moonSelf.player.hearts !== 3) throw new Error('dash i-frames skip moon');
+  yue.moonReady = true;
+  yue.sparks.length = 0;
+  if (yue.moons) yue.moons.length = 0;
+  yue.player.x = 80;
+  yue.player.y = 200;
+  yue.player.dashT = 0;
+  yue.player.dashCd = 0;
+  yue.player.vx = 0;
+  yue.player.vy = 0;
+  yue.player.inv = 2;
+  yue.input.x = 0;
+  yue.input.y = 0;
+  yue.input.dash = false;
+  yue.hitstop = 0;
+  yue.waters = [{ x: 40, y: 160, w: 80, h: 80 }];
+  dropSpark(yue, 80, 180, false);
+  if (!yue.sparks[yue.sparks.length - 1].wet) throw new Error('月廊 wet spark');
+  const yueBooms = yue.stats.booms;
+  for (let i = 0; i < 24; i++) update(yue, 0.1);
+  if (yue.moonReady !== true) throw new Error('月廊 wet fizzle does not consume');
+  if (yue.stats.booms !== yueBooms) throw new Error('月廊 wet no extra boom');
+  yue.waters = [];
+  explode(yue, 200, 200, false, false, false, { fork: true });
+  if (yue.moonReady !== true) throw new Error('月廊 fork does not consume');
+  yue.echoReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  for (let i = 0; i < 12; i++) update(yue, 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 echo does not consume');
+  yue.fanReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateFans(yue, FAN_DT * FAN_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 fan-fork does not consume');
+  yue.drumReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateDrums(yue, 0.55);
+  if (yue.moonReady !== true) throw new Error('月廊 drum-wave does not consume');
+  yue.pulseReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updatePulses(yue, PULSE_DT * PULSE_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 pulse-aftershock does not consume');
+  yue.rainReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateRains(yue, RAIN_DT * RAIN_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 rain-drop does not consume');
+  yue.springReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateSprings(yue, SPRING_DT * SPRING_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 spring-jet does not consume');
+  yue.waveReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateWaves(yue, WAVE_DT * WAVE_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 wave-seat does not consume');
+  yue.starReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateStars(yue, STAR_DT * STAR_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 star-seat does not consume');
+  yue.crossReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateCrosses(yue, CROSS_DT * CROSS_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 cross-seat does not consume');
+  yue.frameReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateFrames(yue, FRAME_DT * 8 + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 frame-seat does not consume');
+  yue.coilReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateCoils(yue, COIL_DT * COIL_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 coil-seat does not consume');
+  yue.curtainReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateCurtains(yue, CURTAIN_DT * CURTAIN_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 curtain-seat does not consume');
+  yue.gateReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateGates(yue, GATE_DT * GATE_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 gate-seat does not consume');
+  yue.archReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateArches(yue, ARCH_DT * ARCH_WAVES * ARCH_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 arch-seat does not consume');
+  yue.wingReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateWings(yue, WING_DT * WING_WAVES * WING_N * 2 + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 wing-seat does not consume');
+  yue.spinReady = true;
+  explode(yue, 200, 200, false);
+  yue.moonReady = true;
+  yue.hitstop = 0;
+  updateSpins(yue, SPIN_DT * SPIN_N + 0.05);
+  if (yue.moonReady !== true) throw new Error('月廊 spin-orbit does not consume');
+  yue.waters = [];
+  explode(yue, yueBox.x + yueBox.w * 0.5, yueBox.y - 20, false);
+  if (!yueBox.open) throw new Error('月廊 dry trail should open 心核');
+  takeCore(yue, { x: 100, y: 100 });
+  if (!yue.won || yue.toast !== TOAST.all) throw new Error('月廊 should 通关');
+  const hudYue = makeState();
+  resetRoom(hudYue, 51, false);
+  if (roomHudText(hudYue).indexOf('月廊 · 52/') !== 0) throw new Error('HUD 月廊 52/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (MOON_N !== 5) throw new Error('MOON_N 5');
+  if (MOON_X !== 150) throw new Error('MOON_X 150');
+  if (MOON_R !== 90) throw new Error('MOON_R 90');
+  if (MOON_WAVES !== 3) throw new Error('MOON_WAVES 3');
+  if (MOON_DT !== 0.10) throw new Error('MOON_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.moonGet !== '捡到月爆') throw new Error('捡到月爆');
+  if (TOAST.moonUse !== '月牙出来了') throw new Error('月牙出来了 toast');
+  if (TOAST.moonRoom !== '月牙清场') throw new Error('月牙清场');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
