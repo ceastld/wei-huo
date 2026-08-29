@@ -101,6 +101,12 @@ const ARROW_GAP = 90;
 const ARROW_TIP = 70;
 const ARROW_WAVES = 3;
 const ARROW_DT = 0.10;
+const ANCHOR_N = 5;
+const ANCHOR_GAP = 90;
+const ANCHOR_FLARE = 90;
+const ANCHOR_DROP = 50;
+const ANCHOR_WAVES = 3;
+const ANCHOR_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -205,6 +211,7 @@ const NAMES = {
   moon: '月爆',
   bowl: '碗爆',
   arrow: '箭爆',
+  anchor: '锚爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -363,6 +370,9 @@ const TOAST = {
   arrowGet: '捡到箭爆',
   arrowUse: '箭已离弦',
   arrowRoom: '箭廊试锋',
+  anchorGet: '捡到锚爆',
+  anchorUse: '锚已下沉',
+  anchorRoom: '锚廊试锋',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -414,6 +424,7 @@ const COL = {
   moon: '#a8d0ff',
   bowl: '#ffaa5c',
   arrow: '#ff5c6a',
+  anchor: '#5ecfc4',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -683,6 +694,7 @@ function lootKind(drop) {
   if (drop === '月爆' || drop === 'moon') return 'moon';
   if (drop === '碗爆' || drop === 'bowl') return 'bowl';
   if (drop === '箭爆' || drop === 'arrow') return 'arrow';
+  if (drop === '锚爆' || drop === 'anchor') return 'anchor';
   return null;
 }
 
@@ -769,6 +781,7 @@ function makeState() {
     moonReady: false,
     bowlReady: false,
     arrowReady: false,
+    anchorReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -794,6 +807,7 @@ function makeState() {
     moons: [],
     bowls: [],
     arrows: [],
+    anchors: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -930,6 +944,7 @@ function resetRoom(s, index, keepHearts) {
   s.moonReady = false;
   s.bowlReady = false;
   s.arrowReady = false;
+  s.anchorReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -990,6 +1005,8 @@ function resetRoom(s, index, keepHearts) {
   s.bowls.length = 0;
   if (!s.arrows) s.arrows = [];
   s.arrows.length = 0;
+  if (!s.anchors) s.anchors = [];
+  s.anchors.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -1123,6 +1140,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '月廊') toast(s, TOAST.moonRoom, 1.4, COL.moon);
   else if (room.name === '碗廊') toast(s, TOAST.bowlRoom, 1.4, COL.bowl);
   else if (room.name === '箭廊') toast(s, TOAST.arrowRoom, 1.4, COL.arrow);
+  else if (room.name === '锚廊') toast(s, TOAST.anchorRoom, 1.4, COL.anchor);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -2145,6 +2163,32 @@ function updateArrows(s, dt) {
   }
 }
 
+function updateAnchors(s, dt) {
+  if (!s.anchors || !s.anchors.length) return;
+  const fires = [];
+  for (let i = s.anchors.length - 1; i >= 0; i--) {
+    const p = s.anchors[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.anchors.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.anchor, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.anchor, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -2392,6 +2436,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.arrowReady) {
     s.arrowReady = false;
     arrowing = true;
+  }
+  let anchoring = false;
+  if (!forked && s.anchorReady) {
+    s.anchorReady = false;
+    anchoring = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -3218,6 +3267,45 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, '#ffffff', 160);
     }
   }
+  if (anchoring) {
+    if (!s.anchors) s.anchors = [];
+    for (let w = 0; w < ANCHOR_WAVES; w++) {
+      for (let k = 0; k < ANCHOR_N; k++) {
+        let ax;
+        let ay;
+        if (k === 0) {
+          ax = x;
+          ay = y + ANCHOR_GAP;
+        } else if (k === 1) {
+          ax = x;
+          ay = y + 2 * ANCHOR_GAP;
+        } else if (k === 2) {
+          ax = x;
+          ay = y + 3 * ANCHOR_GAP;
+        } else if (k === 3) {
+          ax = x - ANCHOR_FLARE;
+          ay = y + 3 * ANCHOR_GAP + ANCHOR_DROP;
+        } else {
+          ax = x + ANCHOR_FLARE;
+          ay = y + 3 * ANCHOR_GAP + ANCHOR_DROP;
+        }
+        s.anchors.push({
+          x: Math.round(ax),
+          y: Math.round(ay),
+          t: ANCHOR_DT * (w * ANCHOR_N + k + 1),
+          ox: x,
+          oy: y,
+        });
+      }
+    }
+    toast(s, TOAST.anchorUse, 1.1, COL.anchor);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.anchor, 170);
+      burst(s, x, y, 4, '#ffffff', 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -3504,6 +3592,7 @@ function watchSteer(s, dt) {
   let moonIt = null;
   let bowlIt = null;
   let arrowIt = null;
+  let anchorIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -3544,8 +3633,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'moon') moonIt = it;
     if (it.kind === 'bowl') bowlIt = it;
     if (it.kind === 'arrow') arrowIt = it;
+    if (it.kind === 'anchor') anchorIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt) || (!s.arrowReady && arrowIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt) || (!s.arrowReady && arrowIt) || (!s.anchorReady && anchorIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3727,6 +3817,10 @@ function watchSteer(s, dt) {
   } else if (!s.arrowReady && arrowIt) {
     tx = arrowIt.x - p.x;
     ty = arrowIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.anchorReady && anchorIt) {
+    tx = anchorIt.x - p.x;
+    ty = anchorIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3921,6 +4015,7 @@ function update(s, dt) {
     updateMoons(s, dt);
     updateBowls(s, dt);
     updateArrows(s, dt);
+    updateAnchors(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3956,6 +4051,7 @@ function update(s, dt) {
     updateMoons(s, dt);
     updateBowls(s, dt);
     updateArrows(s, dt);
+    updateAnchors(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -4083,6 +4179,7 @@ function update(s, dt) {
   updateMoons(s, dt);
   updateBowls(s, dt);
   updateArrows(s, dt);
+  updateAnchors(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -4374,6 +4471,13 @@ function update(s, dt) {
       toast(s, TOAST.arrowGet, 1.1, COL.arrow);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.arrow, 130);
+      burst(s, it.x, it.y, 4, '#ffffff', 110);
+      punch(s, 3);
+    } else if (it.kind === 'anchor') {
+      s.anchorReady = true;
+      toast(s, TOAST.anchorGet, 1.1, COL.anchor);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.anchor, 130);
       burst(s, it.x, it.y, 4, '#ffffff', 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -5305,6 +5409,28 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.arrow, it.x, it.y - 16);
+    } else if (it.kind === 'anchor') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.anchor, 0.7);
+      glow(ctx, it.x, it.y, 8, '#ffffff', 0.35);
+      ctx.fillStyle = COL.anchor;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(it.x, it.y - 4.2);
+      ctx.lineTo(it.x, it.y + 2.4);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(it.x - 3.6, it.y + 0.6);
+      ctx.lineTo(it.x, it.y + 3.8);
+      ctx.lineTo(it.x + 3.6, it.y + 0.6);
+      ctx.stroke();
+      ctx.fillStyle = COL.anchor;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.anchor, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -6240,6 +6366,50 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('箭', p.x, p.y - 12);
+    }
+  }
+
+  if (s.anchors && s.anchors.length) {
+    for (let i = 0; i < s.anchors.length; i++) {
+      const p = s.anchors[i];
+      const maxT = ANCHOR_DT * ANCHOR_WAVES * ANCHOR_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.anchor, 0.28);
+      ctx.strokeStyle = COL.anchor;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - 5);
+      ctx.lineTo(p.x, p.y + 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x - 4, p.y);
+      ctx.lineTo(p.x, p.y + 3.4);
+      ctx.lineTo(p.x + 4, p.y);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.anchor;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.anchor;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('锚', p.x, p.y - 12);
     }
   }
 
@@ -7321,6 +7491,34 @@ function draw(s, ctx) {
     ctx.lineTo(ax + 0.2, ay + 1.8);
     ctx.stroke();
   }
+  if (s.anchorReady) {
+    let nx;
+    let ny;
+    if (reducedMotion()) {
+      nx = p.x;
+      ny = p.y - 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15 + Math.PI * 5.4 + Math.PI * 5.65 + Math.PI * 5.9 + Math.PI * 6.15 + Math.PI * 6.4 + Math.PI * 6.65 + Math.PI * 6.9 + Math.PI * 7.15 + Math.PI * 7.4;
+      nx = p.x + Math.cos(a) * 16;
+      ny = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, nx, ny, 8, COL.anchor, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.anchor;
+    ctx.arc(nx, ny, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.moveTo(nx, ny - 2.4);
+    ctx.lineTo(nx, ny + 1.4);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(nx - 2.0, ny + 0.2);
+    ctx.lineTo(nx, ny + 2.2);
+    ctx.lineTo(nx + 2.0, ny + 0.2);
+    ctx.stroke();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -7827,6 +8025,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (wingEl && s.arrowReady && !s.wingReady) {
     wingEl.textContent = NAMES.arrow;
   }
+  const anchorEl = (typeof document !== 'undefined') ? document.getElementById('anchor') : null;
+  if (anchorEl) {
+    anchorEl.textContent = s.anchorReady ? NAMES.anchor : '';
+  } else if (arrowEl && s.anchorReady && !s.arrowReady) {
+    arrowEl.textContent = NAMES.anchor;
+  } else if (bowlEl && s.anchorReady && !s.bowlReady) {
+    bowlEl.textContent = NAMES.anchor;
+  } else if (moonEl && s.anchorReady && !s.moonReady) {
+    moonEl.textContent = NAMES.anchor;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -8010,10 +8218,16 @@ function selfCheck() {
   if (ARROW_TIP !== 70) throw new Error('ARROW_TIP 70');
   if (ARROW_WAVES !== 3) throw new Error('ARROW_WAVES 3');
   if (ARROW_DT !== 0.10) throw new Error('ARROW_DT 0.10');
+  if (ANCHOR_N !== 5) throw new Error('ANCHOR_N 5');
+  if (ANCHOR_GAP !== 90) throw new Error('ANCHOR_GAP 90');
+  if (ANCHOR_FLARE !== 90) throw new Error('ANCHOR_FLARE 90');
+  if (ANCHOR_DROP !== 50) throw new Error('ANCHOR_DROP 50');
+  if (ANCHOR_WAVES !== 3) throw new Error('ANCHOR_WAVES 3');
+  if (ANCHOR_DT !== 0.10) throw new Error('ANCHOR_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 54) throw new Error('need 54 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊', '箭廊'];
+  if (!ROOMS || ROOMS.length !== 55) throw new Error('need 55 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊', '箭廊', '锚廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -8111,6 +8325,8 @@ function selfCheck() {
   if (ROOMS[52].name !== '碗廊') throw new Error('room 53 碗廊');
   if (ROOMS[53].id !== 'jianlang') throw new Error('箭廊 id');
   if (ROOMS[53].name !== '箭廊') throw new Error('room 54 箭廊');
+  if (ROOMS[54].id !== 'maolang') throw new Error('锚廊 id');
+  if (ROOMS[54].name !== '锚廊') throw new Error('room 55 锚廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -8178,6 +8394,9 @@ function selfCheck() {
   if (NAMES.arrow !== '箭爆') throw new Error('NAMES.arrow');
   if (COL.arrow !== '#ff5c6a') throw new Error('COL.arrow');
   if (lootKind('箭爆') !== 'arrow' || lootKind('arrow') !== 'arrow') throw new Error('lootKind 箭爆');
+  if (NAMES.anchor !== '锚爆') throw new Error('NAMES.anchor');
+  if (COL.anchor !== '#5ecfc4') throw new Error('COL.anchor');
+  if (lootKind('锚爆') !== 'anchor' || lootKind('anchor') !== 'anchor') throw new Error('lootKind 锚爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -8200,7 +8419,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '箭爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '箭爆', '锚爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -15206,6 +15425,7 @@ function selfCheck() {
   bothP.moonReady = true;
   bothP.bowlReady = true;
   bothP.arrowReady = true;
+  bothP.anchorReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -15227,6 +15447,7 @@ function selfCheck() {
   if (bothP.moonReady) throw new Error('same boom spends 月爆');
   if (bothP.bowlReady) throw new Error('same boom spends 碗爆');
   if (bothP.arrowReady) throw new Error('same boom spends 箭爆');
+  if (bothP.anchorReady) throw new Error('same boom spends 锚爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -15244,6 +15465,7 @@ function selfCheck() {
   if (!bothP.moons || bothP.moons.length !== MOON_WAVES * MOON_N) throw new Error('same boom moons');
   if (!bothP.bowls || bothP.bowls.length !== BOWL_WAVES * BOWL_N) throw new Error('same boom bowls');
   if (!bothP.arrows || bothP.arrows.length !== ARROW_WAVES * ARROW_N) throw new Error('same boom arrows');
+  if (!bothP.anchors || bothP.anchors.length !== ANCHOR_WAVES * ANCHOR_N) throw new Error('same boom anchors');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -19732,6 +19954,12 @@ function selfCheck() {
   wan.hitstop = 0;
   updateArrows(wan, ARROW_DT * ARROW_WAVES * ARROW_N + 0.05);
   if (wan.bowlReady !== true) throw new Error('碗廊 arrow-seat does not consume');
+  wan.anchorReady = true;
+  explode(wan, 200, 200, false);
+  wan.bowlReady = true;
+  wan.hitstop = 0;
+  updateAnchors(wan, ANCHOR_DT * ANCHOR_WAVES * ANCHOR_N + 0.05);
+  if (wan.bowlReady !== true) throw new Error('碗廊 anchor-seat does not consume');
   wan.waters = [];
   explode(wan, wanBox.x + wanBox.w * 0.5, wanBox.y - 20, false);
   if (!wanBox.open) throw new Error('碗廊 dry trail should open 心核');
@@ -19786,6 +20014,7 @@ function selfCheck() {
   let jianCrossItem = 0;
   let jianStarItem = 0;
   let jianWaveItem = 0;
+  let jianAnchorItem = 0;
   for (let i = 0; i < jian.crates.length; i++) {
     if (jian.crates[i].loot === 'core') jianCore += 1;
     if (jian.crates[i].loot === 'heal') jianHeal += 1;
@@ -19804,9 +20033,10 @@ function selfCheck() {
     if (jian.items[i].kind === 'cross') jianCrossItem += 1;
     if (jian.items[i].kind === 'star') jianStarItem += 1;
     if (jian.items[i].kind === 'wave') jianWaveItem += 1;
+    if (jian.items[i].kind === 'anchor') jianAnchorItem += 1;
   }
   if (jianArrowItem < 1) throw new Error('箭廊 needs 箭爆');
-  if (jianBowlItem || jianMoonItem || jianWingItem || jianArchItem || jianGateItem || jianCurtainItem || jianCoilItem || jianFrameItem || jianCrossItem || jianStarItem || jianWaveItem) throw new Error('箭廊 no extra pickup');
+  if (jianBowlItem || jianMoonItem || jianWingItem || jianArchItem || jianGateItem || jianCurtainItem || jianCoilItem || jianFrameItem || jianCrossItem || jianStarItem || jianWaveItem || jianAnchorItem) throw new Error('箭廊 no extra pickup');
   if (jianCore !== 1) throw new Error('箭廊 心核');
   if (jianHeal < 1) throw new Error('箭廊 回星');
   const jianBox = jian.crates.find(function (c) { return c.loot === 'core'; });
@@ -20131,6 +20361,12 @@ function selfCheck() {
   jian.hitstop = 0;
   updateBowls(jian, BOWL_DT * BOWL_WAVES * BOWL_N + 0.05);
   if (jian.arrowReady !== true) throw new Error('箭廊 bowl-seat does not consume');
+  jian.anchorReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateAnchors(jian, ANCHOR_DT * ANCHOR_WAVES * ANCHOR_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 anchor-seat does not consume');
   jian.spinReady = true;
   explode(jian, 200, 200, false);
   jian.arrowReady = true;
@@ -20141,7 +20377,10 @@ function selfCheck() {
   explode(jian, jianBox.x + jianBox.w * 0.5, jianBox.y - 20, false);
   if (!jianBox.open) throw new Error('箭廊 dry trail should open 心核');
   takeCore(jian, { x: 100, y: 100 });
-  if (!jian.won || jian.toast !== TOAST.all) throw new Error('箭廊 should 通关');
+  if (jian.won) throw new Error('箭廊 should not 通关');
+  if (jian.toast !== TOAST.core) throw new Error('箭廊 过关');
+  for (let i = 0; i < 20; i++) update(jian, 0.1);
+  if (jian.roomName !== '锚廊') throw new Error('core advances to 锚廊');
   const hudJian = makeState();
   resetRoom(hudJian, 53, false);
   if (roomHudText(hudJian).indexOf('箭廊 · 54/') !== 0) throw new Error('HUD 箭廊 54/n');
@@ -20157,6 +20396,418 @@ function selfCheck() {
   if (TOAST.arrowGet !== '捡到箭爆') throw new Error('捡到箭爆');
   if (TOAST.arrowUse !== '箭已离弦') throw new Error('箭已离弦 toast');
   if (TOAST.arrowRoom !== '箭廊试锋') throw new Error('箭廊试锋');
+
+  const mao = makeState();
+  resetRoom(mao, 54, false);
+  if (mao.roomName !== '锚廊' || mao.roomId !== 'maolang') throw new Error('maolang load');
+  if (mao.toast !== TOAST.anchorRoom) throw new Error('锚廊 intro');
+  if (mao.roomW !== 960 || mao.roomH !== 480) throw new Error('锚廊 size');
+  if (mao.player.x !== 400 || mao.player.y !== 40) throw new Error('锚廊 spawn');
+  if (mao.anchorReady) throw new Error('锚廊 anchor starts false');
+  if (!mao.anchors || mao.anchors.length) throw new Error('锚廊 anchors start empty');
+  let maoStill = 0;
+  let maoTide = 0;
+  for (let i = 0; i < mao.waters.length; i++) {
+    if (mao.waters[i].tide) maoTide += 1;
+    else maoStill += 1;
+  }
+  if (maoStill < 1) throw new Error('锚廊 needs static 水洼');
+  if (maoTide) throw new Error('锚廊 no tide');
+  let maoCore = 0;
+  let maoHeal = 0;
+  let maoThick = 0;
+  let maoAnchorItem = 0;
+  let maoArrowItem = 0;
+  let maoBowlItem = 0;
+  let maoMoonItem = 0;
+  let maoWingItem = 0;
+  let maoArchItem = 0;
+  let maoGateItem = 0;
+  let maoCurtainItem = 0;
+  let maoCoilItem = 0;
+  let maoFrameItem = 0;
+  let maoCrossItem = 0;
+  let maoStarItem = 0;
+  let maoWaveItem = 0;
+  for (let i = 0; i < mao.crates.length; i++) {
+    if (mao.crates[i].loot === 'core') maoCore += 1;
+    if (mao.crates[i].loot === 'heal') maoHeal += 1;
+    if (mao.crates[i].thick) maoThick += 1;
+  }
+  for (let i = 0; i < mao.items.length; i++) {
+    if (mao.items[i].kind === 'anchor') maoAnchorItem += 1;
+    if (mao.items[i].kind === 'arrow') maoArrowItem += 1;
+    if (mao.items[i].kind === 'bowl') maoBowlItem += 1;
+    if (mao.items[i].kind === 'moon') maoMoonItem += 1;
+    if (mao.items[i].kind === 'wing') maoWingItem += 1;
+    if (mao.items[i].kind === 'arch') maoArchItem += 1;
+    if (mao.items[i].kind === 'gate') maoGateItem += 1;
+    if (mao.items[i].kind === 'curtain') maoCurtainItem += 1;
+    if (mao.items[i].kind === 'coil') maoCoilItem += 1;
+    if (mao.items[i].kind === 'frame') maoFrameItem += 1;
+    if (mao.items[i].kind === 'cross') maoCrossItem += 1;
+    if (mao.items[i].kind === 'star') maoStarItem += 1;
+    if (mao.items[i].kind === 'wave') maoWaveItem += 1;
+  }
+  if (maoAnchorItem < 1) throw new Error('锚廊 needs 锚爆');
+  if (maoArrowItem || maoBowlItem || maoMoonItem || maoWingItem || maoArchItem || maoGateItem || maoCurtainItem || maoCoilItem || maoFrameItem || maoCrossItem || maoStarItem || maoWaveItem) throw new Error('锚廊 no extra pickup');
+  if (maoCore !== 1) throw new Error('锚廊 心核');
+  if (maoHeal < 1) throw new Error('锚廊 回星');
+  const maoBox = mao.crates.find(function (c) { return c.loot === 'core'; });
+  if (!maoBox || maoBox.thick) throw new Error('锚廊 心核 crate is not thick');
+  if (maoThick) throw new Error('锚廊 no thick crate');
+  let maoHound = 0;
+  let maoGuard = 0;
+  let maoMoth = 0;
+  let maoEater = 0;
+  let maoShell = 0;
+  let maoBoomer = 0;
+  for (let i = 0; i < mao.enemies.length; i++) {
+    if (isHound(mao.enemies[i])) maoHound += 1;
+    else if (isMoth(mao.enemies[i])) maoMoth += 1;
+    else if (isEater(mao.enemies[i])) maoEater += 1;
+    else if (isShell(mao.enemies[i])) maoShell += 1;
+    else if (isBoomer(mao.enemies[i])) maoBoomer += 1;
+    else maoGuard += 1;
+  }
+  if (maoGuard !== 5 || maoHound !== 0 || maoMoth !== 0 || maoEater !== 0 || maoShell !== 0 || maoBoomer !== 0) {
+    throw new Error('锚廊 烬卫 only');
+  }
+  if (inWater(mao, 400, 40) || inOil(mao, 400, 40)) throw new Error('锚廊 spawn dry');
+  if (inWater(mao, 400, 70) || inOil(mao, 400, 70)) throw new Error('锚廊 锚爆 dry');
+  if (inWater(mao, 400, 100) || inOil(mao, 400, 100)) throw new Error('锚廊 plant dry');
+  if (inOil(mao, 820, 80) || inWater(mao, 820, 80)) throw new Error('锚廊 core dry');
+  if (inWater(mao, 400, 190) || inOil(mao, 400, 190)) throw new Error('锚廊 烬卫 dry 0');
+  if (inWater(mao, 400, 280) || inOil(mao, 400, 280)) throw new Error('锚廊 烬卫 dry 1');
+  if (inWater(mao, 400, 370) || inOil(mao, 400, 370)) throw new Error('锚廊 烬卫 dry 2');
+  if (inWater(mao, 310, 420) || inOil(mao, 310, 420)) throw new Error('锚廊 烬卫 dry 3');
+  if (inWater(mao, 490, 420) || inOil(mao, 490, 420)) throw new Error('锚廊 烬卫 dry 4');
+  if (!inWater(mao, 830, 385)) throw new Error('锚廊 wet bag');
+  if (inWater(mao, 400, 40)) throw new Error('锚廊 north pocket wet');
+  for (let i = 0; i < mao.crates.length; i++) {
+    const c = mao.crates[i];
+    if (circleRect(mao.player.x, mao.player.y, mao.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('锚廊 crate on spawn');
+    }
+  }
+  for (let y = 40; y <= 100; y += 10) {
+    for (let i = 0; i < mao.crates.length; i++) {
+      const c = mao.crates[i];
+      if (circleRect(400, y, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('锚廊 crate on dry walk');
+      }
+    }
+  }
+  const mao0 = mao.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 190) < 1; });
+  const mao1 = mao.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 280) < 1; });
+  const mao2 = mao.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 370) < 1; });
+  const mao3 = mao.enemies.find(function (e) { return Math.abs(e.x - 310) < 1 && Math.abs(e.y - 420) < 1; });
+  const mao4 = mao.enemies.find(function (e) { return Math.abs(e.x - 490) < 1 && Math.abs(e.y - 420) < 1; });
+  if (!mao0 || !mao1 || !mao2 || !mao3 || !mao4) throw new Error('锚廊 five 烬卫 seats');
+  const maoSeats = [mao0, mao1, mao2, mao3, mao4];
+  for (let i = 0; i < maoSeats.length; i++) {
+    const e = maoSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 100);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('锚廊 primary misses 烬卫');
+    if (e.x < 40 || e.y < 40 || e.x > 960 - 40 || e.y > 480 - 40) throw new Error('锚廊 烬卫 margin');
+  }
+  const anchorSeatPos = [];
+  for (let k = 0; k < ANCHOR_N; k++) {
+    let ax;
+    let ay;
+    if (k === 0) {
+      ax = 400;
+      ay = 100 + ANCHOR_GAP;
+    } else if (k === 1) {
+      ax = 400;
+      ay = 100 + 2 * ANCHOR_GAP;
+    } else if (k === 2) {
+      ax = 400;
+      ay = 100 + 3 * ANCHOR_GAP;
+    } else if (k === 3) {
+      ax = 400 - ANCHOR_FLARE;
+      ay = 100 + 3 * ANCHOR_GAP + ANCHOR_DROP;
+    } else {
+      ax = 400 + ANCHOR_FLARE;
+      ay = 100 + 3 * ANCHOR_GAP + ANCHOR_DROP;
+    }
+    anchorSeatPos.push([Math.round(ax), Math.round(ay)]);
+  }
+  if (Math.abs(anchorSeatPos[0][0] - 400) > 1e-6 || Math.abs(anchorSeatPos[0][1] - 190) > 1e-6) throw new Error('anchor formula 0');
+  if (Math.abs(anchorSeatPos[1][0] - 400) > 1e-6 || Math.abs(anchorSeatPos[1][1] - 280) > 1e-6) throw new Error('anchor formula 1');
+  if (Math.abs(anchorSeatPos[2][0] - 400) > 1e-6 || Math.abs(anchorSeatPos[2][1] - 370) > 1e-6) throw new Error('anchor formula 2');
+  if (Math.abs(anchorSeatPos[3][0] - 310) > 1e-6 || Math.abs(anchorSeatPos[3][1] - 420) > 1e-6) throw new Error('anchor formula 3');
+  if (Math.abs(anchorSeatPos[4][0] - 490) > 1e-6 || Math.abs(anchorSeatPos[4][1] - 420) > 1e-6) throw new Error('anchor formula 4');
+  for (let i = 0; i < maoSeats.length; i++) {
+    const e = maoSeats[i];
+    let hit = false;
+    for (let k = 0; k < anchorSeatPos.length; k++) {
+      if (dist(e.x, e.y, anchorSeatPos[k][0], anchorSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('锚廊 hot anchor reaches 烬卫');
+  }
+  const maoGround = mao.items.find(function (it) { return it.kind === 'anchor' && !it.taken; });
+  if (!maoGround) throw new Error('锚廊 ground 锚爆 present');
+  if (Math.abs(maoGround.x - 400) > 1e-6 || Math.abs(maoGround.y - 70) > 1e-6) throw new Error('锚廊 pickup seat');
+  let maoPickGuard = 1e9;
+  for (let i = 0; i < maoSeats.length; i++) {
+    const d = dist(maoGround.x, maoGround.y, maoSeats[i].x, maoSeats[i].y);
+    if (d < maoPickGuard) maoPickGuard = d;
+  }
+  if (maoPickGuard <= HOT_BLAST_R + ENEMY_R) throw new Error('锚廊 pickup too close to seat');
+  const maoCoreCx = maoBox.x + maoBox.w * 0.5;
+  const maoCoreCy = maoBox.y + maoBox.h * 0.5;
+  if (!(dist(maoCoreCx, maoCoreCy, 400, 100) > HOT_BLAST_R)) throw new Error('锚廊 core outside plant blast');
+  if (!(dist(maoCoreCx, maoCoreCy, 400, 190) > HOT_BLAST_R)) throw new Error('锚廊 core outside stem');
+  mao.player.x = 400;
+  mao.player.y = 40;
+  mao.player.hearts = 3;
+  mao.player.inv = 2;
+  mao.hitstop = 0;
+  mao.embers.length = 0;
+  mao.player.x = maoGround.x;
+  mao.player.y = maoGround.y;
+  update(mao, 0.016);
+  if (mao.anchorReady !== true) throw new Error('pick anchor → anchorReady');
+  if (mao.toast !== TOAST.anchorGet) throw new Error('捡到锚爆 room');
+  mao.player.x = 400;
+  mao.player.y = 40;
+  mao.player.inv = 2;
+  mao.hitstop = 0;
+  mao.embers.length = 0;
+  const maoHp0 = mao0.hp;
+  const maoHp1 = mao1.hp;
+  const maoHp2 = mao2.hp;
+  const maoHp3 = mao3.hp;
+  const maoHp4 = mao4.hp;
+  explode(mao, 400, 100, false);
+  if (mao.anchorReady) throw new Error('锚廊 anchor spends');
+  if (mao.toast !== TOAST.anchorUse) throw new Error('锚已下沉 room');
+  if (!mao.anchors || mao.anchors.length !== ANCHOR_WAVES * ANCHOR_N) throw new Error('锚廊 anchors queued');
+  if (Math.abs(mao.anchors[0].x - 400) > 1e-6 || Math.abs(mao.anchors[0].y - 190) > 1e-6) throw new Error('锚廊 seat 0');
+  if (Math.abs(mao.anchors[1].x - 400) > 1e-6 || Math.abs(mao.anchors[1].y - 280) > 1e-6) throw new Error('锚廊 seat 1');
+  if (Math.abs(mao.anchors[2].x - 400) > 1e-6 || Math.abs(mao.anchors[2].y - 370) > 1e-6) throw new Error('锚廊 seat 2');
+  if (Math.abs(mao.anchors[3].x - 310) > 1e-6 || Math.abs(mao.anchors[3].y - 420) > 1e-6) throw new Error('锚廊 seat 3');
+  if (Math.abs(mao.anchors[4].x - 490) > 1e-6 || Math.abs(mao.anchors[4].y - 420) > 1e-6) throw new Error('锚廊 seat 4');
+  if (Math.abs(mao.anchors[5].x - 400) > 1e-6 || Math.abs(mao.anchors[5].y - 190) > 1e-6) throw new Error('锚廊 seat 5');
+  if (Math.abs(mao.anchors[10].x - 400) > 1e-6 || Math.abs(mao.anchors[10].y - 190) > 1e-6) throw new Error('锚廊 seat 10');
+  if (Math.abs(mao.anchors[0].t - ANCHOR_DT) > 1e-6) throw new Error('锚廊 dt 1');
+  if (Math.abs(mao.anchors[1].t - ANCHOR_DT * 2) > 1e-6) throw new Error('锚廊 dt 2');
+  if (Math.abs(mao.anchors[14].t - ANCHOR_DT * 15) > 1e-6) throw new Error('锚廊 dt 15');
+  if (mao0.hp !== maoHp0 || mao1.hp !== maoHp1 || mao2.hp !== maoHp2 || mao3.hp !== maoHp3 || mao4.hp !== maoHp4) {
+    throw new Error('锚廊 primary misses');
+  }
+  mao.hitstop = 0;
+  updateAnchors(mao, ANCHOR_DT + 0.01);
+  if (mao.anchors.length !== 14) throw new Error('锚廊 first anchor 0');
+  if (!(mao0.hp === maoHp0 - 2 || mao0.hp <= 0)) throw new Error('锚廊 0 first seat');
+  mao0.x = 400;
+  mao0.y = 190;
+  mao1.x = 400;
+  mao1.y = 280;
+  mao2.x = 400;
+  mao2.y = 370;
+  mao3.x = 310;
+  mao3.y = 420;
+  mao4.x = 490;
+  mao4.y = 420;
+  mao.hitstop = 0;
+  updateAnchors(mao, ANCHOR_DT * 14 + 0.05);
+  if (mao.anchors.length !== 0) throw new Error('锚廊 anchors finish');
+  if (mao0.hp > 0) throw new Error('锚廊 anchor dmg 0');
+  if (mao1.hp > 0) throw new Error('锚廊 anchor dmg 1');
+  if (mao2.hp > 0) throw new Error('锚廊 anchor dmg 2');
+  if (mao3.hp > 0) throw new Error('锚廊 anchor dmg 3');
+  if (mao4.hp > 0) throw new Error('锚廊 anchor dmg 4');
+  mao.anchorReady = true;
+  dropSpark(mao, 200, 200, false);
+  if (mao.anchorReady !== true) throw new Error('dropSpark keeps 锚爆');
+  mao.input.dash = true;
+  mao.player.dashT = 0;
+  mao.player.dashCd = 0;
+  mao.hitstop = 0;
+  update(mao, 0.016);
+  if (mao.anchorReady !== true) throw new Error('dash does not consume 锚爆');
+  const anchorSelf = makeState();
+  resetRoom(anchorSelf, 0, false);
+  anchorSelf.anchorReady = true;
+  anchorSelf.player.x = 400;
+  anchorSelf.player.y = 190;
+  anchorSelf.player.inv = 0;
+  anchorSelf.player.hearts = 3;
+  explode(anchorSelf, 400, 100, false);
+  if (anchorSelf.player.hearts !== 3) throw new Error('primary dry misses player for anchor');
+  anchorSelf.hitstop = 0;
+  updateAnchors(anchorSelf, ANCHOR_DT + 0.01);
+  if (anchorSelf.player.hearts !== 2) throw new Error('own anchor hurts player');
+  anchorSelf.player.hearts = 3;
+  anchorSelf.player.inv = 0;
+  anchorSelf.player.dashT = DASH_TIME;
+  anchorSelf.anchors = [{ x: 400, y: 190, t: 0, ox: 400, oy: 100 }];
+  anchorSelf.hitstop = 0;
+  updateAnchors(anchorSelf, 0.02);
+  if (anchorSelf.player.hearts !== 3) throw new Error('dash i-frames skip anchor');
+  mao.anchorReady = true;
+  mao.sparks.length = 0;
+  if (mao.anchors) mao.anchors.length = 0;
+  mao.player.x = 400;
+  mao.player.y = 40;
+  mao.player.dashT = 0;
+  mao.player.dashCd = 0;
+  mao.player.vx = 0;
+  mao.player.vy = 0;
+  mao.player.inv = 2;
+  mao.input.x = 0;
+  mao.input.y = 0;
+  mao.input.dash = false;
+  mao.hitstop = 0;
+  mao.waters = [{ x: 360, y: 0, w: 80, h: 80 }];
+  dropSpark(mao, 400, 20, false);
+  if (!mao.sparks[mao.sparks.length - 1].wet) throw new Error('锚廊 wet spark');
+  const maoBooms = mao.stats.booms;
+  for (let i = 0; i < 24; i++) update(mao, 0.1);
+  if (mao.anchorReady !== true) throw new Error('锚廊 wet fizzle does not consume');
+  if (mao.stats.booms !== maoBooms) throw new Error('锚廊 wet no extra boom');
+  mao.waters = [];
+  explode(mao, 200, 200, false, false, false, { fork: true });
+  if (mao.anchorReady !== true) throw new Error('锚廊 fork does not consume');
+  mao.echoReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  for (let i = 0; i < 12; i++) update(mao, 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 echo does not consume');
+  mao.fanReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateFans(mao, FAN_DT * FAN_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 fan-fork does not consume');
+  mao.drumReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateDrums(mao, 0.55);
+  if (mao.anchorReady !== true) throw new Error('锚廊 drum-wave does not consume');
+  mao.pulseReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updatePulses(mao, PULSE_DT * PULSE_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 pulse-aftershock does not consume');
+  mao.rainReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateRains(mao, RAIN_DT * RAIN_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 rain-drop does not consume');
+  mao.springReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateSprings(mao, SPRING_DT * SPRING_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 spring-jet does not consume');
+  mao.waveReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateWaves(mao, WAVE_DT * WAVE_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 wave-seat does not consume');
+  mao.starReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateStars(mao, STAR_DT * STAR_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 star-seat does not consume');
+  mao.crossReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateCrosses(mao, CROSS_DT * CROSS_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 cross-seat does not consume');
+  mao.frameReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateFrames(mao, FRAME_DT * 8 + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 frame-seat does not consume');
+  mao.coilReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateCoils(mao, COIL_DT * COIL_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 coil-seat does not consume');
+  mao.curtainReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateCurtains(mao, CURTAIN_DT * CURTAIN_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 curtain-seat does not consume');
+  mao.gateReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateGates(mao, GATE_DT * GATE_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 gate-seat does not consume');
+  mao.archReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateArches(mao, ARCH_DT * ARCH_WAVES * ARCH_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 arch-seat does not consume');
+  mao.wingReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateWings(mao, WING_DT * WING_WAVES * WING_N * 2 + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 wing-seat does not consume');
+  mao.moonReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateMoons(mao, MOON_DT * MOON_WAVES * MOON_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 moon-seat does not consume');
+  mao.bowlReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateBowls(mao, BOWL_DT * BOWL_WAVES * BOWL_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 bowl-seat does not consume');
+  mao.arrowReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateArrows(mao, ARROW_DT * ARROW_WAVES * ARROW_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 arrow-seat does not consume');
+  mao.spinReady = true;
+  explode(mao, 200, 200, false);
+  mao.anchorReady = true;
+  mao.hitstop = 0;
+  updateSpins(mao, SPIN_DT * SPIN_N + 0.05);
+  if (mao.anchorReady !== true) throw new Error('锚廊 spin-orbit does not consume');
+  mao.waters = [];
+  explode(mao, maoBox.x + maoBox.w * 0.5, maoBox.y - 20, false);
+  if (!maoBox.open) throw new Error('锚廊 dry trail should open 心核');
+  takeCore(mao, { x: 100, y: 100 });
+  if (!mao.won || mao.toast !== TOAST.all) throw new Error('锚廊 should 通关');
+  const hudMao = makeState();
+  resetRoom(hudMao, 54, false);
+  if (roomHudText(hudMao).indexOf('锚廊 · 55/') !== 0) throw new Error('HUD 锚廊 55/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (ANCHOR_N !== 5) throw new Error('ANCHOR_N 5');
+  if (ANCHOR_GAP !== 90) throw new Error('ANCHOR_GAP 90');
+  if (ANCHOR_FLARE !== 90) throw new Error('ANCHOR_FLARE 90');
+  if (ANCHOR_DROP !== 50) throw new Error('ANCHOR_DROP 50');
+  if (ANCHOR_WAVES !== 3) throw new Error('ANCHOR_WAVES 3');
+  if (ANCHOR_DT !== 0.10) throw new Error('ANCHOR_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.anchorGet !== '捡到锚爆') throw new Error('捡到锚爆');
+  if (TOAST.anchorUse !== '锚已下沉') throw new Error('锚已下沉 toast');
+  if (TOAST.anchorRoom !== '锚廊试锋') throw new Error('锚廊试锋');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
