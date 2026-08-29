@@ -96,6 +96,11 @@ const BOWL_N = 5;
 const BOWL_R = 120;
 const BOWL_WAVES = 3;
 const BOWL_DT = 0.10;
+const ARROW_N = 5;
+const ARROW_GAP = 90;
+const ARROW_TIP = 70;
+const ARROW_WAVES = 3;
+const ARROW_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -199,6 +204,7 @@ const NAMES = {
   wing: '翼爆',
   moon: '月爆',
   bowl: '碗爆',
+  arrow: '箭爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -354,6 +360,9 @@ const TOAST = {
   bowlGet: '捡到碗爆',
   bowlUse: '碗口开了',
   bowlRoom: '碗口清场',
+  arrowGet: '捡到箭爆',
+  arrowUse: '箭已离弦',
+  arrowRoom: '箭廊试锋',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -404,6 +413,7 @@ const COL = {
   wing: '#ff7a3c',
   moon: '#a8d0ff',
   bowl: '#ffaa5c',
+  arrow: '#ff5c6a',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -672,6 +682,7 @@ function lootKind(drop) {
   if (drop === '翼爆' || drop === 'wing') return 'wing';
   if (drop === '月爆' || drop === 'moon') return 'moon';
   if (drop === '碗爆' || drop === 'bowl') return 'bowl';
+  if (drop === '箭爆' || drop === 'arrow') return 'arrow';
   return null;
 }
 
@@ -757,6 +768,7 @@ function makeState() {
     wingReady: false,
     moonReady: false,
     bowlReady: false,
+    arrowReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -781,6 +793,7 @@ function makeState() {
     wings: [],
     moons: [],
     bowls: [],
+    arrows: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -916,6 +929,7 @@ function resetRoom(s, index, keepHearts) {
   s.wingReady = false;
   s.moonReady = false;
   s.bowlReady = false;
+  s.arrowReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -974,6 +988,8 @@ function resetRoom(s, index, keepHearts) {
   s.moons.length = 0;
   if (!s.bowls) s.bowls = [];
   s.bowls.length = 0;
+  if (!s.arrows) s.arrows = [];
+  s.arrows.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -1106,6 +1122,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '翼廊') toast(s, TOAST.wingRoom, 1.4, COL.wing);
   else if (room.name === '月廊') toast(s, TOAST.moonRoom, 1.4, COL.moon);
   else if (room.name === '碗廊') toast(s, TOAST.bowlRoom, 1.4, COL.bowl);
+  else if (room.name === '箭廊') toast(s, TOAST.arrowRoom, 1.4, COL.arrow);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -2102,6 +2119,32 @@ function updateBowls(s, dt) {
   }
 }
 
+function updateArrows(s, dt) {
+  if (!s.arrows || !s.arrows.length) return;
+  const fires = [];
+  for (let i = s.arrows.length - 1; i >= 0; i--) {
+    const p = s.arrows[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.arrows.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.arrow, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.arrow, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -2344,6 +2387,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.bowlReady) {
     s.bowlReady = false;
     bowling = true;
+  }
+  let arrowing = false;
+  if (!forked && s.arrowReady) {
+    s.arrowReady = false;
+    arrowing = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -3131,6 +3179,45 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, '#ffffff', 160);
     }
   }
+  if (arrowing) {
+    if (!s.arrows) s.arrows = [];
+    for (let w = 0; w < ARROW_WAVES; w++) {
+      for (let k = 0; k < ARROW_N; k++) {
+        let ax;
+        let ay;
+        if (k === 0) {
+          ax = x + ARROW_GAP;
+          ay = y;
+        } else if (k === 1) {
+          ax = x + 2 * ARROW_GAP;
+          ay = y;
+        } else if (k === 2) {
+          ax = x + 3 * ARROW_GAP;
+          ay = y;
+        } else if (k === 3) {
+          ax = x + 3 * ARROW_GAP + ARROW_GAP * 0.55;
+          ay = y - ARROW_TIP;
+        } else {
+          ax = x + 3 * ARROW_GAP + ARROW_GAP * 0.55;
+          ay = y + ARROW_TIP;
+        }
+        s.arrows.push({
+          x: Math.round(ax),
+          y: Math.round(ay),
+          t: ARROW_DT * (w * ARROW_N + k + 1),
+          ox: x,
+          oy: y,
+        });
+      }
+    }
+    toast(s, TOAST.arrowUse, 1.1, COL.arrow);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.arrow, 170);
+      burst(s, x, y, 4, '#ffffff', 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -3416,6 +3503,7 @@ function watchSteer(s, dt) {
   let wingIt = null;
   let moonIt = null;
   let bowlIt = null;
+  let arrowIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -3455,8 +3543,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'wing') wingIt = it;
     if (it.kind === 'moon') moonIt = it;
     if (it.kind === 'bowl') bowlIt = it;
+    if (it.kind === 'arrow') arrowIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt) || (!s.arrowReady && arrowIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3634,6 +3723,10 @@ function watchSteer(s, dt) {
   } else if (!s.bowlReady && bowlIt) {
     tx = bowlIt.x - p.x;
     ty = bowlIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.arrowReady && arrowIt) {
+    tx = arrowIt.x - p.x;
+    ty = arrowIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -3827,6 +3920,7 @@ function update(s, dt) {
     updateWings(s, dt);
     updateMoons(s, dt);
     updateBowls(s, dt);
+    updateArrows(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -3861,6 +3955,7 @@ function update(s, dt) {
     updateWings(s, dt);
     updateMoons(s, dt);
     updateBowls(s, dt);
+    updateArrows(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -3987,6 +4082,7 @@ function update(s, dt) {
   updateWings(s, dt);
   updateMoons(s, dt);
   updateBowls(s, dt);
+  updateArrows(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -4271,6 +4367,13 @@ function update(s, dt) {
       toast(s, TOAST.bowlGet, 1.1, COL.bowl);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.bowl, 130);
+      burst(s, it.x, it.y, 4, '#ffffff', 110);
+      punch(s, 3);
+    } else if (it.kind === 'arrow') {
+      s.arrowReady = true;
+      toast(s, TOAST.arrowGet, 1.1, COL.arrow);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.arrow, 130);
       burst(s, it.x, it.y, 4, '#ffffff', 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -5180,6 +5283,28 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.bowl, it.x, it.y - 16);
+    } else if (it.kind === 'arrow') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.arrow, 0.7);
+      glow(ctx, it.x, it.y, 8, '#ffffff', 0.35);
+      ctx.fillStyle = COL.arrow;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(it.x - 4.2, it.y);
+      ctx.lineTo(it.x + 3.4, it.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(it.x + 0.6, it.y - 3.2);
+      ctx.lineTo(it.x + 4.4, it.y);
+      ctx.lineTo(it.x + 0.6, it.y + 3.2);
+      ctx.stroke();
+      ctx.fillStyle = COL.arrow;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.arrow, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -6075,6 +6200,46 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('碗', p.x, p.y - 12);
+    }
+  }
+
+  if (s.arrows && s.arrows.length) {
+    for (let i = 0; i < s.arrows.length; i++) {
+      const p = s.arrows[i];
+      const maxT = ARROW_DT * ARROW_WAVES * ARROW_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.arrow, 0.28);
+      ctx.strokeStyle = COL.arrow;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x - 4, p.y - 3.2);
+      ctx.lineTo(p.x + 3.4, p.y);
+      ctx.lineTo(p.x - 4, p.y + 3.2);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.arrow;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.arrow;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('箭', p.x, p.y - 12);
     }
   }
 
@@ -7128,6 +7293,34 @@ function draw(s, ctx) {
     ctx.arc(bx, by + 0.8, 2.2, 0.15 * Math.PI, 0.85 * Math.PI, false);
     ctx.stroke();
   }
+  if (s.arrowReady) {
+    let ax;
+    let ay;
+    if (reducedMotion()) {
+      ax = p.x + 14;
+      ay = p.y;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15 + Math.PI * 5.4 + Math.PI * 5.65 + Math.PI * 5.9 + Math.PI * 6.15 + Math.PI * 6.4 + Math.PI * 6.65 + Math.PI * 6.9 + Math.PI * 7.15;
+      ax = p.x + Math.cos(a) * 16;
+      ay = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, ax, ay, 8, COL.arrow, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.arrow;
+    ctx.arc(ax, ay, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.moveTo(ax - 2.4, ay);
+    ctx.lineTo(ax + 2.2, ay);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ax + 0.2, ay - 1.8);
+    ctx.lineTo(ax + 2.6, ay);
+    ctx.lineTo(ax + 0.2, ay + 1.8);
+    ctx.stroke();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -7624,6 +7817,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (archEl && s.bowlReady && !s.archReady) {
     archEl.textContent = NAMES.bowl;
   }
+  const arrowEl = (typeof document !== 'undefined') ? document.getElementById('arrow') : null;
+  if (arrowEl) {
+    arrowEl.textContent = s.arrowReady ? NAMES.arrow : '';
+  } else if (bowlEl && s.arrowReady && !s.bowlReady) {
+    bowlEl.textContent = NAMES.arrow;
+  } else if (moonEl && s.arrowReady && !s.moonReady) {
+    moonEl.textContent = NAMES.arrow;
+  } else if (wingEl && s.arrowReady && !s.wingReady) {
+    wingEl.textContent = NAMES.arrow;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -7802,10 +8005,15 @@ function selfCheck() {
   if (BOWL_R !== 120) throw new Error('BOWL_R 120');
   if (BOWL_WAVES !== 3) throw new Error('BOWL_WAVES 3');
   if (BOWL_DT !== 0.10) throw new Error('BOWL_DT 0.10');
+  if (ARROW_N !== 5) throw new Error('ARROW_N 5');
+  if (ARROW_GAP !== 90) throw new Error('ARROW_GAP 90');
+  if (ARROW_TIP !== 70) throw new Error('ARROW_TIP 70');
+  if (ARROW_WAVES !== 3) throw new Error('ARROW_WAVES 3');
+  if (ARROW_DT !== 0.10) throw new Error('ARROW_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 53) throw new Error('need 53 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊'];
+  if (!ROOMS || ROOMS.length !== 54) throw new Error('need 54 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊', '箭廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -7901,6 +8109,8 @@ function selfCheck() {
   if (ROOMS[51].name !== '月廊') throw new Error('room 52 月廊');
   if (ROOMS[52].id !== 'wanlang') throw new Error('碗廊 id');
   if (ROOMS[52].name !== '碗廊') throw new Error('room 53 碗廊');
+  if (ROOMS[53].id !== 'jianlang') throw new Error('箭廊 id');
+  if (ROOMS[53].name !== '箭廊') throw new Error('room 54 箭廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -7965,6 +8175,9 @@ function selfCheck() {
   if (NAMES.bowl !== '碗爆') throw new Error('NAMES.bowl');
   if (COL.bowl !== '#ffaa5c') throw new Error('COL.bowl');
   if (lootKind('碗爆') !== 'bowl' || lootKind('bowl') !== 'bowl') throw new Error('lootKind 碗爆');
+  if (NAMES.arrow !== '箭爆') throw new Error('NAMES.arrow');
+  if (COL.arrow !== '#ff5c6a') throw new Error('COL.arrow');
+  if (lootKind('箭爆') !== 'arrow' || lootKind('arrow') !== 'arrow') throw new Error('lootKind 箭爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -7987,7 +8200,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '箭爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -9532,6 +9745,7 @@ function selfCheck() {
   if (lootKind('翼爆') !== 'wing' || lootKind('wing') !== 'wing') throw new Error('lootKind 翼爆');
   if (lootKind('月爆') !== 'moon' || lootKind('moon') !== 'moon') throw new Error('lootKind 月爆');
   if (lootKind('碗爆') !== 'bowl' || lootKind('bowl') !== 'bowl') throw new Error('lootKind 碗爆');
+  if (lootKind('箭爆') !== 'arrow' || lootKind('arrow') !== 'arrow') throw new Error('lootKind 箭爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -14991,6 +15205,7 @@ function selfCheck() {
   bothP.wingReady = true;
   bothP.moonReady = true;
   bothP.bowlReady = true;
+  bothP.arrowReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -15011,6 +15226,7 @@ function selfCheck() {
   if (bothP.wingReady) throw new Error('same boom spends 翼爆');
   if (bothP.moonReady) throw new Error('same boom spends 月爆');
   if (bothP.bowlReady) throw new Error('same boom spends 碗爆');
+  if (bothP.arrowReady) throw new Error('same boom spends 箭爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -15027,6 +15243,7 @@ function selfCheck() {
   if (!bothP.wings || bothP.wings.length !== WING_WAVES * WING_N * 2) throw new Error('same boom wings');
   if (!bothP.moons || bothP.moons.length !== MOON_WAVES * MOON_N) throw new Error('same boom moons');
   if (!bothP.bowls || bothP.bowls.length !== BOWL_WAVES * BOWL_N) throw new Error('same boom bowls');
+  if (!bothP.arrows || bothP.arrows.length !== ARROW_WAVES * ARROW_N) throw new Error('same boom arrows');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -19167,6 +19384,7 @@ function selfCheck() {
   let wanHeal = 0;
   let wanThick = 0;
   let wanBowlItem = 0;
+  let wanArrowItem = 0;
   let wanMoonItem = 0;
   let wanWingItem = 0;
   let wanArchItem = 0;
@@ -19184,6 +19402,7 @@ function selfCheck() {
   }
   for (let i = 0; i < wan.items.length; i++) {
     if (wan.items[i].kind === 'bowl') wanBowlItem += 1;
+    if (wan.items[i].kind === 'arrow') wanArrowItem += 1;
     if (wan.items[i].kind === 'moon') wanMoonItem += 1;
     if (wan.items[i].kind === 'wing') wanWingItem += 1;
     if (wan.items[i].kind === 'arch') wanArchItem += 1;
@@ -19196,7 +19415,7 @@ function selfCheck() {
     if (wan.items[i].kind === 'wave') wanWaveItem += 1;
   }
   if (wanBowlItem < 1) throw new Error('碗廊 needs 碗爆');
-  if (wanMoonItem || wanWingItem || wanArchItem || wanGateItem || wanCurtainItem || wanCoilItem || wanFrameItem || wanCrossItem || wanStarItem || wanWaveItem) throw new Error('碗廊 no extra pickup');
+  if (wanMoonItem || wanWingItem || wanArchItem || wanGateItem || wanCurtainItem || wanCoilItem || wanFrameItem || wanCrossItem || wanStarItem || wanWaveItem || wanArrowItem) throw new Error('碗廊 no extra pickup');
   if (wanCore !== 1) throw new Error('碗廊 心核');
   if (wanHeal < 1) throw new Error('碗廊 回星');
   const wanBox = wan.crates.find(function (c) { return c.loot === 'core'; });
@@ -19507,11 +19726,20 @@ function selfCheck() {
   wan.hitstop = 0;
   updateSpins(wan, SPIN_DT * SPIN_N + 0.05);
   if (wan.bowlReady !== true) throw new Error('碗廊 spin-orbit does not consume');
+  wan.arrowReady = true;
+  explode(wan, 200, 200, false);
+  wan.bowlReady = true;
+  wan.hitstop = 0;
+  updateArrows(wan, ARROW_DT * ARROW_WAVES * ARROW_N + 0.05);
+  if (wan.bowlReady !== true) throw new Error('碗廊 arrow-seat does not consume');
   wan.waters = [];
   explode(wan, wanBox.x + wanBox.w * 0.5, wanBox.y - 20, false);
   if (!wanBox.open) throw new Error('碗廊 dry trail should open 心核');
   takeCore(wan, { x: 100, y: 100 });
-  if (!wan.won || wan.toast !== TOAST.all) throw new Error('碗廊 should 通关');
+  if (wan.won) throw new Error('碗廊 should not 通关');
+  if (wan.toast !== TOAST.core) throw new Error('碗廊 过关');
+  for (let i = 0; i < 20; i++) update(wan, 0.1);
+  if (wan.roomName !== '箭廊') throw new Error('core advances to 箭廊');
   const hudWan = makeState();
   resetRoom(hudWan, 52, false);
   if (roomHudText(hudWan).indexOf('碗廊 · 53/') !== 0) throw new Error('HUD 碗廊 53/n');
@@ -19526,6 +19754,409 @@ function selfCheck() {
   if (TOAST.bowlGet !== '捡到碗爆') throw new Error('捡到碗爆');
   if (TOAST.bowlUse !== '碗口开了') throw new Error('碗口开了 toast');
   if (TOAST.bowlRoom !== '碗口清场') throw new Error('碗口清场');
+
+  const jian = makeState();
+  resetRoom(jian, 53, false);
+  if (jian.roomName !== '箭廊' || jian.roomId !== 'jianlang') throw new Error('jianlang load');
+  if (jian.toast !== TOAST.arrowRoom) throw new Error('箭廊 intro');
+  if (jian.roomW !== 960 || jian.roomH !== 400) throw new Error('箭廊 size');
+  if (jian.player.x !== 100 || jian.player.y !== 200) throw new Error('箭廊 spawn');
+  if (jian.arrowReady) throw new Error('箭廊 arrow starts false');
+  if (!jian.arrows || jian.arrows.length) throw new Error('箭廊 arrows start empty');
+  let jianStill = 0;
+  let jianTide = 0;
+  for (let i = 0; i < jian.waters.length; i++) {
+    if (jian.waters[i].tide) jianTide += 1;
+    else jianStill += 1;
+  }
+  if (jianStill < 1) throw new Error('箭廊 needs static 水洼');
+  if (jianTide) throw new Error('箭廊 no tide');
+  let jianCore = 0;
+  let jianHeal = 0;
+  let jianThick = 0;
+  let jianArrowItem = 0;
+  let jianBowlItem = 0;
+  let jianMoonItem = 0;
+  let jianWingItem = 0;
+  let jianArchItem = 0;
+  let jianGateItem = 0;
+  let jianCurtainItem = 0;
+  let jianCoilItem = 0;
+  let jianFrameItem = 0;
+  let jianCrossItem = 0;
+  let jianStarItem = 0;
+  let jianWaveItem = 0;
+  for (let i = 0; i < jian.crates.length; i++) {
+    if (jian.crates[i].loot === 'core') jianCore += 1;
+    if (jian.crates[i].loot === 'heal') jianHeal += 1;
+    if (jian.crates[i].thick) jianThick += 1;
+  }
+  for (let i = 0; i < jian.items.length; i++) {
+    if (jian.items[i].kind === 'arrow') jianArrowItem += 1;
+    if (jian.items[i].kind === 'bowl') jianBowlItem += 1;
+    if (jian.items[i].kind === 'moon') jianMoonItem += 1;
+    if (jian.items[i].kind === 'wing') jianWingItem += 1;
+    if (jian.items[i].kind === 'arch') jianArchItem += 1;
+    if (jian.items[i].kind === 'gate') jianGateItem += 1;
+    if (jian.items[i].kind === 'curtain') jianCurtainItem += 1;
+    if (jian.items[i].kind === 'coil') jianCoilItem += 1;
+    if (jian.items[i].kind === 'frame') jianFrameItem += 1;
+    if (jian.items[i].kind === 'cross') jianCrossItem += 1;
+    if (jian.items[i].kind === 'star') jianStarItem += 1;
+    if (jian.items[i].kind === 'wave') jianWaveItem += 1;
+  }
+  if (jianArrowItem < 1) throw new Error('箭廊 needs 箭爆');
+  if (jianBowlItem || jianMoonItem || jianWingItem || jianArchItem || jianGateItem || jianCurtainItem || jianCoilItem || jianFrameItem || jianCrossItem || jianStarItem || jianWaveItem) throw new Error('箭廊 no extra pickup');
+  if (jianCore !== 1) throw new Error('箭廊 心核');
+  if (jianHeal < 1) throw new Error('箭廊 回星');
+  const jianBox = jian.crates.find(function (c) { return c.loot === 'core'; });
+  if (!jianBox || jianBox.thick) throw new Error('箭廊 心核 crate is not thick');
+  if (jianThick) throw new Error('箭廊 no thick crate');
+  let jianHound = 0;
+  let jianGuard = 0;
+  let jianMoth = 0;
+  let jianEater = 0;
+  let jianShell = 0;
+  let jianBoomer = 0;
+  for (let i = 0; i < jian.enemies.length; i++) {
+    if (isHound(jian.enemies[i])) jianHound += 1;
+    else if (isMoth(jian.enemies[i])) jianMoth += 1;
+    else if (isEater(jian.enemies[i])) jianEater += 1;
+    else if (isShell(jian.enemies[i])) jianShell += 1;
+    else if (isBoomer(jian.enemies[i])) jianBoomer += 1;
+    else jianGuard += 1;
+  }
+  if (jianGuard !== 5 || jianHound !== 0 || jianMoth !== 0 || jianEater !== 0 || jianShell !== 0 || jianBoomer !== 0) {
+    throw new Error('箭廊 烬卫 only');
+  }
+  if (inWater(jian, 100, 200) || inOil(jian, 100, 200)) throw new Error('箭廊 spawn dry');
+  if (inWater(jian, 180, 200) || inOil(jian, 180, 200)) throw new Error('箭廊 箭爆 dry');
+  if (inWater(jian, 280, 200) || inOil(jian, 280, 200)) throw new Error('箭廊 plant dry');
+  if (inOil(jian, 820, 200) || inWater(jian, 820, 200)) throw new Error('箭廊 core dry');
+  if (inWater(jian, 370, 200) || inOil(jian, 370, 200)) throw new Error('箭廊 烬卫 dry 0');
+  if (inWater(jian, 460, 200) || inOil(jian, 460, 200)) throw new Error('箭廊 烬卫 dry 1');
+  if (inWater(jian, 550, 200) || inOil(jian, 550, 200)) throw new Error('箭廊 烬卫 dry 2');
+  if (inWater(jian, 600, 130) || inOil(jian, 600, 130)) throw new Error('箭廊 烬卫 dry 3');
+  if (inWater(jian, 600, 270) || inOil(jian, 600, 270)) throw new Error('箭廊 烬卫 dry 4');
+  if (!inWater(jian, 830, 345)) throw new Error('箭廊 wet bag');
+  if (inWater(jian, 100, 200)) throw new Error('箭廊 west pocket wet');
+  for (let i = 0; i < jian.crates.length; i++) {
+    const c = jian.crates[i];
+    if (circleRect(jian.player.x, jian.player.y, jian.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('箭廊 crate on spawn');
+    }
+  }
+  for (let x = 100; x <= 280; x += 10) {
+    for (let i = 0; i < jian.crates.length; i++) {
+      const c = jian.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('箭廊 crate on dry walk');
+      }
+    }
+  }
+  const jian0 = jian.enemies.find(function (e) { return Math.abs(e.x - 370) < 1 && Math.abs(e.y - 200) < 1; });
+  const jian1 = jian.enemies.find(function (e) { return Math.abs(e.x - 460) < 1 && Math.abs(e.y - 200) < 1; });
+  const jian2 = jian.enemies.find(function (e) { return Math.abs(e.x - 550) < 1 && Math.abs(e.y - 200) < 1; });
+  const jian3 = jian.enemies.find(function (e) { return Math.abs(e.x - 600) < 1 && Math.abs(e.y - 130) < 1; });
+  const jian4 = jian.enemies.find(function (e) { return Math.abs(e.x - 600) < 1 && Math.abs(e.y - 270) < 1; });
+  if (!jian0 || !jian1 || !jian2 || !jian3 || !jian4) throw new Error('箭廊 five 烬卫 seats');
+  const jianSeats = [jian0, jian1, jian2, jian3, jian4];
+  for (let i = 0; i < jianSeats.length; i++) {
+    const e = jianSeats[i];
+    const dPlant = dist(e.x, e.y, 280, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('箭廊 primary misses 烬卫');
+    if (e.x < 40 || e.y < 40 || e.x > 960 - 40 || e.y > 400 - 40) throw new Error('箭廊 烬卫 margin');
+  }
+  const arrowSeatPos = [];
+  for (let k = 0; k < ARROW_N; k++) {
+    let ax;
+    let ay;
+    if (k === 0) {
+      ax = 280 + ARROW_GAP;
+      ay = 200;
+    } else if (k === 1) {
+      ax = 280 + 2 * ARROW_GAP;
+      ay = 200;
+    } else if (k === 2) {
+      ax = 280 + 3 * ARROW_GAP;
+      ay = 200;
+    } else if (k === 3) {
+      ax = 280 + 3 * ARROW_GAP + ARROW_GAP * 0.55;
+      ay = 200 - ARROW_TIP;
+    } else {
+      ax = 280 + 3 * ARROW_GAP + ARROW_GAP * 0.55;
+      ay = 200 + ARROW_TIP;
+    }
+    arrowSeatPos.push([Math.round(ax), Math.round(ay)]);
+  }
+  if (Math.abs(arrowSeatPos[0][0] - 370) > 1e-6 || Math.abs(arrowSeatPos[0][1] - 200) > 1e-6) throw new Error('arrow formula 0');
+  if (Math.abs(arrowSeatPos[1][0] - 460) > 1e-6 || Math.abs(arrowSeatPos[1][1] - 200) > 1e-6) throw new Error('arrow formula 1');
+  if (Math.abs(arrowSeatPos[2][0] - 550) > 1e-6 || Math.abs(arrowSeatPos[2][1] - 200) > 1e-6) throw new Error('arrow formula 2');
+  if (Math.abs(arrowSeatPos[3][0] - 600) > 1e-6 || Math.abs(arrowSeatPos[3][1] - 130) > 1e-6) throw new Error('arrow formula 3');
+  if (Math.abs(arrowSeatPos[4][0] - 600) > 1e-6 || Math.abs(arrowSeatPos[4][1] - 270) > 1e-6) throw new Error('arrow formula 4');
+  for (let i = 0; i < jianSeats.length; i++) {
+    const e = jianSeats[i];
+    let hit = false;
+    for (let k = 0; k < arrowSeatPos.length; k++) {
+      if (dist(e.x, e.y, arrowSeatPos[k][0], arrowSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('箭廊 hot arrow reaches 烬卫');
+  }
+  const jianGround = jian.items.find(function (it) { return it.kind === 'arrow' && !it.taken; });
+  if (!jianGround) throw new Error('箭廊 ground 箭爆 present');
+  if (Math.abs(jianGround.x - 180) > 1e-6 || Math.abs(jianGround.y - 200) > 1e-6) throw new Error('箭廊 pickup seat');
+  let jianPickGuard = 1e9;
+  for (let i = 0; i < jianSeats.length; i++) {
+    const d = dist(jianGround.x, jianGround.y, jianSeats[i].x, jianSeats[i].y);
+    if (d < jianPickGuard) jianPickGuard = d;
+  }
+  if (jianPickGuard <= HOT_BLAST_R + ENEMY_R) throw new Error('箭廊 pickup too close to seat');
+  const jianCoreCx = jianBox.x + jianBox.w * 0.5;
+  const jianCoreCy = jianBox.y + jianBox.h * 0.5;
+  if (!(dist(jianCoreCx, jianCoreCy, 280, 200) > HOT_BLAST_R)) throw new Error('箭廊 core outside plant blast');
+  if (!(dist(jianCoreCx, jianCoreCy, 600, 130) > HOT_BLAST_R)) throw new Error('箭廊 core outside tip');
+  jian.player.x = 100;
+  jian.player.y = 200;
+  jian.player.hearts = 3;
+  jian.player.inv = 2;
+  jian.hitstop = 0;
+  jian.embers.length = 0;
+  jian.player.x = jianGround.x;
+  jian.player.y = jianGround.y;
+  update(jian, 0.016);
+  if (jian.arrowReady !== true) throw new Error('pick arrow → arrowReady');
+  if (jian.toast !== TOAST.arrowGet) throw new Error('捡到箭爆 room');
+  jian.player.x = 100;
+  jian.player.y = 200;
+  jian.player.inv = 2;
+  jian.hitstop = 0;
+  jian.embers.length = 0;
+  const jianHp0 = jian0.hp;
+  const jianHp1 = jian1.hp;
+  const jianHp2 = jian2.hp;
+  const jianHp3 = jian3.hp;
+  const jianHp4 = jian4.hp;
+  explode(jian, 280, 200, false);
+  if (jian.arrowReady) throw new Error('箭廊 arrow spends');
+  if (jian.toast !== TOAST.arrowUse) throw new Error('箭已离弦 room');
+  if (!jian.arrows || jian.arrows.length !== ARROW_WAVES * ARROW_N) throw new Error('箭廊 arrows queued');
+  if (Math.abs(jian.arrows[0].x - 370) > 1e-6 || Math.abs(jian.arrows[0].y - 200) > 1e-6) throw new Error('箭廊 seat 0');
+  if (Math.abs(jian.arrows[1].x - 460) > 1e-6 || Math.abs(jian.arrows[1].y - 200) > 1e-6) throw new Error('箭廊 seat 1');
+  if (Math.abs(jian.arrows[2].x - 550) > 1e-6 || Math.abs(jian.arrows[2].y - 200) > 1e-6) throw new Error('箭廊 seat 2');
+  if (Math.abs(jian.arrows[3].x - 600) > 1e-6 || Math.abs(jian.arrows[3].y - 130) > 1e-6) throw new Error('箭廊 seat 3');
+  if (Math.abs(jian.arrows[4].x - 600) > 1e-6 || Math.abs(jian.arrows[4].y - 270) > 1e-6) throw new Error('箭廊 seat 4');
+  if (Math.abs(jian.arrows[5].x - 370) > 1e-6 || Math.abs(jian.arrows[5].y - 200) > 1e-6) throw new Error('箭廊 seat 5');
+  if (Math.abs(jian.arrows[10].x - 370) > 1e-6 || Math.abs(jian.arrows[10].y - 200) > 1e-6) throw new Error('箭廊 seat 10');
+  if (Math.abs(jian.arrows[0].t - ARROW_DT) > 1e-6) throw new Error('箭廊 dt 1');
+  if (Math.abs(jian.arrows[1].t - ARROW_DT * 2) > 1e-6) throw new Error('箭廊 dt 2');
+  if (Math.abs(jian.arrows[14].t - ARROW_DT * 15) > 1e-6) throw new Error('箭廊 dt 15');
+  if (jian0.hp !== jianHp0 || jian1.hp !== jianHp1 || jian2.hp !== jianHp2 || jian3.hp !== jianHp3 || jian4.hp !== jianHp4) {
+    throw new Error('箭廊 primary misses');
+  }
+  jian.hitstop = 0;
+  updateArrows(jian, ARROW_DT + 0.01);
+  if (jian.arrows.length !== 14) throw new Error('箭廊 first arrow 0');
+  if (!(jian0.hp === jianHp0 - 2 || jian0.hp <= 0)) throw new Error('箭廊 0 first seat');
+  jian0.x = 370;
+  jian0.y = 200;
+  jian1.x = 460;
+  jian1.y = 200;
+  jian2.x = 550;
+  jian2.y = 200;
+  jian3.x = 600;
+  jian3.y = 130;
+  jian4.x = 600;
+  jian4.y = 270;
+  jian.hitstop = 0;
+  updateArrows(jian, ARROW_DT * 14 + 0.05);
+  if (jian.arrows.length !== 0) throw new Error('箭廊 arrows finish');
+  if (jian0.hp > 0) throw new Error('箭廊 arrow dmg 0');
+  if (jian1.hp > 0) throw new Error('箭廊 arrow dmg 1');
+  if (jian2.hp > 0) throw new Error('箭廊 arrow dmg 2');
+  if (jian3.hp > 0) throw new Error('箭廊 arrow dmg 3');
+  if (jian4.hp > 0) throw new Error('箭廊 arrow dmg 4');
+  jian.arrowReady = true;
+  dropSpark(jian, 200, 200, false);
+  if (jian.arrowReady !== true) throw new Error('dropSpark keeps 箭爆');
+  jian.input.dash = true;
+  jian.player.dashT = 0;
+  jian.player.dashCd = 0;
+  jian.hitstop = 0;
+  update(jian, 0.016);
+  if (jian.arrowReady !== true) throw new Error('dash does not consume 箭爆');
+  const arrowSelf = makeState();
+  resetRoom(arrowSelf, 0, false);
+  arrowSelf.arrowReady = true;
+  arrowSelf.player.x = 370;
+  arrowSelf.player.y = 200;
+  arrowSelf.player.inv = 0;
+  arrowSelf.player.hearts = 3;
+  explode(arrowSelf, 280, 200, false);
+  if (arrowSelf.player.hearts !== 3) throw new Error('primary dry misses player for arrow');
+  arrowSelf.hitstop = 0;
+  updateArrows(arrowSelf, ARROW_DT + 0.01);
+  if (arrowSelf.player.hearts !== 2) throw new Error('own arrow hurts player');
+  arrowSelf.player.hearts = 3;
+  arrowSelf.player.inv = 0;
+  arrowSelf.player.dashT = DASH_TIME;
+  arrowSelf.arrows = [{ x: 370, y: 200, t: 0, ox: 280, oy: 200 }];
+  arrowSelf.hitstop = 0;
+  updateArrows(arrowSelf, 0.02);
+  if (arrowSelf.player.hearts !== 3) throw new Error('dash i-frames skip arrow');
+  jian.arrowReady = true;
+  jian.sparks.length = 0;
+  if (jian.arrows) jian.arrows.length = 0;
+  jian.player.x = 100;
+  jian.player.y = 200;
+  jian.player.dashT = 0;
+  jian.player.dashCd = 0;
+  jian.player.vx = 0;
+  jian.player.vy = 0;
+  jian.player.inv = 2;
+  jian.input.x = 0;
+  jian.input.y = 0;
+  jian.input.dash = false;
+  jian.hitstop = 0;
+  jian.waters = [{ x: 60, y: 160, w: 80, h: 80 }];
+  dropSpark(jian, 100, 180, false);
+  if (!jian.sparks[jian.sparks.length - 1].wet) throw new Error('箭廊 wet spark');
+  const jianBooms = jian.stats.booms;
+  for (let i = 0; i < 24; i++) update(jian, 0.1);
+  if (jian.arrowReady !== true) throw new Error('箭廊 wet fizzle does not consume');
+  if (jian.stats.booms !== jianBooms) throw new Error('箭廊 wet no extra boom');
+  jian.waters = [];
+  explode(jian, 200, 200, false, false, false, { fork: true });
+  if (jian.arrowReady !== true) throw new Error('箭廊 fork does not consume');
+  jian.echoReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  for (let i = 0; i < 12; i++) update(jian, 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 echo does not consume');
+  jian.fanReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateFans(jian, FAN_DT * FAN_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 fan-fork does not consume');
+  jian.drumReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateDrums(jian, 0.55);
+  if (jian.arrowReady !== true) throw new Error('箭廊 drum-wave does not consume');
+  jian.pulseReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updatePulses(jian, PULSE_DT * PULSE_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 pulse-aftershock does not consume');
+  jian.rainReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateRains(jian, RAIN_DT * RAIN_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 rain-drop does not consume');
+  jian.springReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateSprings(jian, SPRING_DT * SPRING_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 spring-jet does not consume');
+  jian.waveReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateWaves(jian, WAVE_DT * WAVE_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 wave-seat does not consume');
+  jian.starReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateStars(jian, STAR_DT * STAR_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 star-seat does not consume');
+  jian.crossReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateCrosses(jian, CROSS_DT * CROSS_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 cross-seat does not consume');
+  jian.frameReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateFrames(jian, FRAME_DT * 8 + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 frame-seat does not consume');
+  jian.coilReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateCoils(jian, COIL_DT * COIL_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 coil-seat does not consume');
+  jian.curtainReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateCurtains(jian, CURTAIN_DT * CURTAIN_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 curtain-seat does not consume');
+  jian.gateReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateGates(jian, GATE_DT * GATE_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 gate-seat does not consume');
+  jian.archReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateArches(jian, ARCH_DT * ARCH_WAVES * ARCH_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 arch-seat does not consume');
+  jian.wingReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateWings(jian, WING_DT * WING_WAVES * WING_N * 2 + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 wing-seat does not consume');
+  jian.moonReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateMoons(jian, MOON_DT * MOON_WAVES * MOON_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 moon-seat does not consume');
+  jian.bowlReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateBowls(jian, BOWL_DT * BOWL_WAVES * BOWL_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 bowl-seat does not consume');
+  jian.spinReady = true;
+  explode(jian, 200, 200, false);
+  jian.arrowReady = true;
+  jian.hitstop = 0;
+  updateSpins(jian, SPIN_DT * SPIN_N + 0.05);
+  if (jian.arrowReady !== true) throw new Error('箭廊 spin-orbit does not consume');
+  jian.waters = [];
+  explode(jian, jianBox.x + jianBox.w * 0.5, jianBox.y - 20, false);
+  if (!jianBox.open) throw new Error('箭廊 dry trail should open 心核');
+  takeCore(jian, { x: 100, y: 100 });
+  if (!jian.won || jian.toast !== TOAST.all) throw new Error('箭廊 should 通关');
+  const hudJian = makeState();
+  resetRoom(hudJian, 53, false);
+  if (roomHudText(hudJian).indexOf('箭廊 · 54/') !== 0) throw new Error('HUD 箭廊 54/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (ARROW_N !== 5) throw new Error('ARROW_N 5');
+  if (ARROW_GAP !== 90) throw new Error('ARROW_GAP 90');
+  if (ARROW_TIP !== 70) throw new Error('ARROW_TIP 70');
+  if (ARROW_WAVES !== 3) throw new Error('ARROW_WAVES 3');
+  if (ARROW_DT !== 0.10) throw new Error('ARROW_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.arrowGet !== '捡到箭爆') throw new Error('捡到箭爆');
+  if (TOAST.arrowUse !== '箭已离弦') throw new Error('箭已离弦 toast');
+  if (TOAST.arrowRoom !== '箭廊试锋') throw new Error('箭廊试锋');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
