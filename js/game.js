@@ -116,6 +116,10 @@ const FLOWER_N = 5;
 const FLOWER_R = 120;
 const FLOWER_WAVES = 3;
 const FLOWER_DT = 0.10;
+const TOWER_N = 5;
+const TOWER_GAP = 50;
+const TOWER_WAVES = 3;
+const TOWER_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -223,6 +227,7 @@ const NAMES = {
   anchor: '锚爆',
   hammer: '锤爆',
   flower: '花爆',
+  tower: '塔爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -390,6 +395,9 @@ const TOAST = {
   flowerGet: '捡到花爆',
   flowerUse: '花开了',
   flowerRoom: '花廊试锋',
+  towerGet: '捡到塔爆',
+  towerUse: '塔立起来了',
+  towerRoom: '塔廊试锋',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -444,6 +452,7 @@ const COL = {
   anchor: '#5ecfc4',
   hammer: '#a78bfa',
   flower: '#ff7aa2',
+  tower: '#f59e0b',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -716,6 +725,7 @@ function lootKind(drop) {
   if (drop === '锚爆' || drop === 'anchor') return 'anchor';
   if (drop === '锤爆' || drop === 'hammer') return 'hammer';
   if (drop === '花爆' || drop === 'flower') return 'flower';
+  if (drop === '塔爆' || drop === 'tower') return 'tower';
   return null;
 }
 
@@ -805,6 +815,7 @@ function makeState() {
     anchorReady: false,
     hammerReady: false,
     flowerReady: false,
+    towerReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -833,6 +844,7 @@ function makeState() {
     anchors: [],
     hammers: [],
     flowers: [],
+    towers: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -972,6 +984,7 @@ function resetRoom(s, index, keepHearts) {
   s.anchorReady = false;
   s.hammerReady = false;
   s.flowerReady = false;
+  s.towerReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -1038,6 +1051,8 @@ function resetRoom(s, index, keepHearts) {
   s.hammers.length = 0;
   if (!s.flowers) s.flowers = [];
   s.flowers.length = 0;
+  if (!s.towers) s.towers = [];
+  s.towers.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -1174,6 +1189,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '锚廊') toast(s, TOAST.anchorRoom, 1.4, COL.anchor);
   else if (room.name === '锤廊') toast(s, TOAST.hammerRoom, 1.4, COL.hammer);
   else if (room.name === '花廊') toast(s, TOAST.flowerRoom, 1.4, COL.flower);
+  else if (room.name === '塔廊') toast(s, TOAST.towerRoom, 1.4, COL.tower);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -2274,6 +2290,32 @@ function updateFlowers(s, dt) {
   }
 }
 
+function updateTowers(s, dt) {
+  if (!s.towers || !s.towers.length) return;
+  const fires = [];
+  for (let i = s.towers.length - 1; i >= 0; i--) {
+    const p = s.towers[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.towers.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.tower, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.tower, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -2536,6 +2578,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.flowerReady) {
     s.flowerReady = false;
     flowering = true;
+  }
+  let towering = false;
+  if (!forked && s.towerReady) {
+    s.towerReady = false;
+    towering = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -3464,6 +3511,29 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, '#ffffff', 160);
     }
   }
+  if (towering) {
+    if (!s.towers) s.towers = [];
+    for (let w = 0; w < TOWER_WAVES; w++) {
+      for (let k = 0; k < TOWER_N; k++) {
+        const tx = x;
+        const ty = y - TOWER_GAP * (k + 1);
+        s.towers.push({
+          x: Math.round(tx),
+          y: Math.round(ty),
+          t: TOWER_DT * (w * TOWER_N + k + 1),
+          ox: x,
+          oy: y,
+        });
+      }
+    }
+    toast(s, TOAST.towerUse, 1.1, COL.tower);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.tower, 170);
+      burst(s, x, y, 4, '#ffffff', 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -3753,6 +3823,7 @@ function watchSteer(s, dt) {
   let anchorIt = null;
   let hammerIt = null;
   let flowerIt = null;
+  let towerIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -3796,8 +3867,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'anchor') anchorIt = it;
     if (it.kind === 'hammer') hammerIt = it;
     if (it.kind === 'flower') flowerIt = it;
+    if (it.kind === 'tower') towerIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt) || (!s.arrowReady && arrowIt) || (!s.anchorReady && anchorIt) || (!s.hammerReady && hammerIt) || (!s.flowerReady && flowerIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt) || (!s.arrowReady && arrowIt) || (!s.anchorReady && anchorIt) || (!s.hammerReady && hammerIt) || (!s.flowerReady && flowerIt) || (!s.towerReady && towerIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3991,6 +4063,10 @@ function watchSteer(s, dt) {
   } else if (!s.flowerReady && flowerIt) {
     tx = flowerIt.x - p.x;
     ty = flowerIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.towerReady && towerIt) {
+    tx = towerIt.x - p.x;
+    ty = towerIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -4188,6 +4264,7 @@ function update(s, dt) {
     updateAnchors(s, dt);
     updateHammers(s, dt);
     updateFlowers(s, dt);
+    updateTowers(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -4226,6 +4303,7 @@ function update(s, dt) {
     updateAnchors(s, dt);
     updateHammers(s, dt);
     updateFlowers(s, dt);
+    updateTowers(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -4356,6 +4434,7 @@ function update(s, dt) {
   updateAnchors(s, dt);
   updateHammers(s, dt);
   updateFlowers(s, dt);
+  updateTowers(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -4668,6 +4747,13 @@ function update(s, dt) {
       toast(s, TOAST.flowerGet, 1.1, COL.flower);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.flower, 130);
+      burst(s, it.x, it.y, 4, '#ffffff', 110);
+      punch(s, 3);
+    } else if (it.kind === 'tower') {
+      s.towerReady = true;
+      toast(s, TOAST.towerGet, 1.1, COL.tower);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.tower, 130);
       burst(s, it.x, it.y, 4, '#ffffff', 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -5661,6 +5747,28 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.flower, it.x, it.y - 16);
+    } else if (it.kind === 'tower') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.tower, 0.7);
+      glow(ctx, it.x, it.y, 8, '#ffffff', 0.35);
+      ctx.fillStyle = COL.tower;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(it.x, it.y + 3.6);
+      ctx.lineTo(it.x, it.y - 2.2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(it.x - 3.2, it.y - 0.4);
+      ctx.lineTo(it.x, it.y - 4.0);
+      ctx.lineTo(it.x + 3.2, it.y - 0.4);
+      ctx.stroke();
+      ctx.fillStyle = COL.tower;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.tower, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -6718,6 +6826,41 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('花', p.x, p.y - 12);
+    }
+  }
+
+  if (s.towers && s.towers.length) {
+    for (let i = 0; i < s.towers.length; i++) {
+      const p = s.towers[i];
+      const maxT = TOWER_DT * TOWER_WAVES * TOWER_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.tower, 0.28);
+      ctx.strokeStyle = COL.tower;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.tower;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.tower;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('塔', p.x, p.y - 12);
     }
   }
 
@@ -7880,6 +8023,34 @@ function draw(s, ctx) {
       ctx.stroke();
     }
   }
+  if (s.towerReady) {
+    let tx;
+    let ty;
+    if (reducedMotion()) {
+      tx = p.x + 14;
+      ty = p.y;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15 + Math.PI * 5.4 + Math.PI * 5.65 + Math.PI * 5.9 + Math.PI * 6.15 + Math.PI * 6.4 + Math.PI * 6.65 + Math.PI * 6.9 + Math.PI * 7.15 + Math.PI * 7.4 + Math.PI * 7.65 + Math.PI * 7.9 + Math.PI * 8.15;
+      tx = p.x + Math.cos(a) * 16;
+      ty = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, tx, ty, 8, COL.tower, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.tower;
+    ctx.arc(tx, ty, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.moveTo(tx, ty + 2.2);
+    ctx.lineTo(tx, ty - 1.4);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(tx - 1.8, ty - 0.2);
+    ctx.lineTo(tx, ty - 2.4);
+    ctx.lineTo(tx + 1.8, ty - 0.2);
+    ctx.stroke();
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -8416,6 +8587,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (arrowEl && s.flowerReady && !s.arrowReady) {
     arrowEl.textContent = NAMES.flower;
   }
+  const towerEl = (typeof document !== 'undefined') ? document.getElementById('tower') : null;
+  if (towerEl) {
+    towerEl.textContent = s.towerReady ? NAMES.tower : '';
+  } else if (flowerEl && s.towerReady && !s.flowerReady) {
+    flowerEl.textContent = NAMES.tower;
+  } else if (hammerEl && s.towerReady && !s.hammerReady) {
+    hammerEl.textContent = NAMES.tower;
+  } else if (anchorEl && s.towerReady && !s.anchorReady) {
+    anchorEl.textContent = NAMES.tower;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -8614,10 +8795,14 @@ function selfCheck() {
   if (FLOWER_R !== 120) throw new Error('FLOWER_R 120');
   if (FLOWER_WAVES !== 3) throw new Error('FLOWER_WAVES 3');
   if (FLOWER_DT !== 0.10) throw new Error('FLOWER_DT 0.10');
+  if (TOWER_N !== 5) throw new Error('TOWER_N 5');
+  if (TOWER_GAP !== 50) throw new Error('TOWER_GAP 50');
+  if (TOWER_WAVES !== 3) throw new Error('TOWER_WAVES 3');
+  if (TOWER_DT !== 0.10) throw new Error('TOWER_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 57) throw new Error('need 57 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊', '箭廊', '锚廊', '锤廊', '花廊'];
+  if (!ROOMS || ROOMS.length !== 58) throw new Error('need 58 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊', '箭廊', '锚廊', '锤廊', '花廊', '塔廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -8721,6 +8906,8 @@ function selfCheck() {
   if (ROOMS[55].name !== '锤廊') throw new Error('room 56 锤廊');
   if (ROOMS[56].id !== 'hualang') throw new Error('花廊 id');
   if (ROOMS[56].name !== '花廊') throw new Error('room 57 花廊');
+  if (ROOMS[57].id !== 'talang') throw new Error('塔廊 id');
+  if (ROOMS[57].name !== '塔廊') throw new Error('room 58 塔廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -8797,6 +8984,9 @@ function selfCheck() {
   if (NAMES.flower !== '花爆') throw new Error('NAMES.flower');
   if (COL.flower !== '#ff7aa2') throw new Error('COL.flower');
   if (lootKind('花爆') !== 'flower' || lootKind('flower') !== 'flower') throw new Error('lootKind 花爆');
+  if (NAMES.tower !== '塔爆') throw new Error('NAMES.tower');
+  if (COL.tower !== '#f59e0b') throw new Error('COL.tower');
+  if (lootKind('塔爆') !== 'tower' || lootKind('tower') !== 'tower') throw new Error('lootKind 塔爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -8819,7 +9009,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '箭爆', '锚爆', '锤爆', '花爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '箭爆', '锚爆', '锤爆', '花爆', '塔爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -10368,6 +10558,7 @@ function selfCheck() {
   if (lootKind('锚爆') !== 'anchor' || lootKind('anchor') !== 'anchor') throw new Error('lootKind 锚爆');
   if (lootKind('锤爆') !== 'hammer' || lootKind('hammer') !== 'hammer') throw new Error('lootKind 锤爆');
   if (lootKind('花爆') !== 'flower' || lootKind('flower') !== 'flower') throw new Error('lootKind 花爆');
+  if (lootKind('塔爆') !== 'tower' || lootKind('tower') !== 'tower') throw new Error('lootKind 塔爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -15831,6 +16022,7 @@ function selfCheck() {
   bothP.anchorReady = true;
   bothP.hammerReady = true;
   bothP.flowerReady = true;
+  bothP.towerReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -15855,6 +16047,7 @@ function selfCheck() {
   if (bothP.anchorReady) throw new Error('same boom spends 锚爆');
   if (bothP.hammerReady) throw new Error('same boom spends 锤爆');
   if (bothP.flowerReady) throw new Error('same boom spends 花爆');
+  if (bothP.towerReady) throw new Error('same boom spends 塔爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -15875,6 +16068,7 @@ function selfCheck() {
   if (!bothP.anchors || bothP.anchors.length !== ANCHOR_WAVES * ANCHOR_N) throw new Error('same boom anchors');
   if (!bothP.hammers || bothP.hammers.length !== HAMMER_WAVES * HAMMER_N) throw new Error('same boom hammers');
   if (!bothP.flowers || bothP.flowers.length !== FLOWER_WAVES * FLOWER_N) throw new Error('same boom flowers');
+  if (!bothP.towers || bothP.towers.length !== TOWER_WAVES * TOWER_N) throw new Error('same boom towers');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -21641,6 +21835,12 @@ function selfCheck() {
   chui.hitstop = 0;
   updateFlowers(chui, FLOWER_DT * FLOWER_WAVES * FLOWER_N + 0.05);
   if (chui.hammerReady !== true) throw new Error('锤廊 flower-seat does not consume');
+  chui.towerReady = true;
+  explode(chui, 200, 200, false);
+  chui.hammerReady = true;
+  chui.hitstop = 0;
+  updateTowers(chui, TOWER_DT * TOWER_WAVES * TOWER_N + 0.05);
+  if (chui.hammerReady !== true) throw new Error('锤廊 tower-seat does not consume');
   chui.waters = [];
   explode(chui, chuiBox.x + chuiBox.w * 0.5, chuiBox.y - 20, false);
   if (!chuiBox.open) throw new Error('锤廊 dry trail should open 心核');
@@ -21685,6 +21885,7 @@ function selfCheck() {
   let huaHeal = 0;
   let huaThick = 0;
   let huaFlowerItem = 0;
+  let huaTowerItem = 0;
   let huaHammerItem = 0;
   let huaAnchorItem = 0;
   let huaArrowItem = 0;
@@ -21706,6 +21907,7 @@ function selfCheck() {
   }
   for (let i = 0; i < hua.items.length; i++) {
     if (hua.items[i].kind === 'flower') huaFlowerItem += 1;
+    if (hua.items[i].kind === 'tower') huaTowerItem += 1;
     if (hua.items[i].kind === 'hammer') huaHammerItem += 1;
     if (hua.items[i].kind === 'anchor') huaAnchorItem += 1;
     if (hua.items[i].kind === 'arrow') huaArrowItem += 1;
@@ -21722,7 +21924,7 @@ function selfCheck() {
     if (hua.items[i].kind === 'wave') huaWaveItem += 1;
   }
   if (huaFlowerItem < 1) throw new Error('花廊 needs 花爆');
-  if (huaHammerItem || huaAnchorItem || huaArrowItem || huaBowlItem || huaMoonItem || huaWingItem || huaArchItem || huaGateItem || huaCurtainItem || huaCoilItem || huaFrameItem || huaCrossItem || huaStarItem || huaWaveItem) throw new Error('花廊 no extra pickup');
+  if (huaHammerItem || huaTowerItem || huaAnchorItem || huaArrowItem || huaBowlItem || huaMoonItem || huaWingItem || huaArchItem || huaGateItem || huaCurtainItem || huaCoilItem || huaFrameItem || huaCrossItem || huaStarItem || huaWaveItem) throw new Error('花廊 no extra pickup');
   if (huaCore !== 1) throw new Error('花廊 心核');
   if (huaHeal < 1) throw new Error('花廊 回星');
   const huaBox = hua.crates.find(function (c) { return c.loot === 'core'; });
@@ -22056,11 +22258,20 @@ function selfCheck() {
   hua.hitstop = 0;
   updateSpins(hua, SPIN_DT * SPIN_N + 0.05);
   if (hua.flowerReady !== true) throw new Error('花廊 spin-orbit does not consume');
+  hua.towerReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateTowers(hua, TOWER_DT * TOWER_WAVES * TOWER_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 tower-seat does not consume');
   hua.waters = [];
   explode(hua, huaBox.x + huaBox.w * 0.5, huaBox.y - 20, false);
   if (!huaBox.open) throw new Error('花廊 dry trail should open 心核');
   takeCore(hua, { x: 100, y: 100 });
-  if (!hua.won || hua.toast !== TOAST.all) throw new Error('花廊 should 通关');
+  if (hua.won) throw new Error('花廊 should not 通关');
+  if (hua.toast !== TOAST.core) throw new Error('花廊 过关');
+  for (let i = 0; i < 20; i++) update(hua, 0.1);
+  if (hua.roomName !== '塔廊') throw new Error('core advances to 塔廊');
   const hudHua = makeState();
   resetRoom(hudHua, 56, false);
   if (roomHudText(hudHua).indexOf('花廊 · 57/') !== 0) throw new Error('HUD 花廊 57/n');
@@ -22075,6 +22286,432 @@ function selfCheck() {
   if (TOAST.flowerGet !== '捡到花爆') throw new Error('捡到花爆');
   if (TOAST.flowerUse !== '花开了') throw new Error('花开了 toast');
   if (TOAST.flowerRoom !== '花廊试锋') throw new Error('花廊试锋');
+
+  const ta = makeState();
+  resetRoom(ta, 57, false);
+  if (ta.roomName !== '塔廊' || ta.roomId !== 'talang') throw new Error('talang load');
+  if (ta.toast !== TOAST.towerRoom) throw new Error('塔廊 intro');
+  if (ta.roomW !== 960 || ta.roomH !== 400) throw new Error('塔廊 size');
+  if (ta.player.x !== 100 || ta.player.y !== 200) throw new Error('塔廊 spawn');
+  if (ta.towerReady) throw new Error('塔廊 tower starts false');
+  if (!ta.towers || ta.towers.length) throw new Error('塔廊 towers start empty');
+  let taStill = 0;
+  let taTide = 0;
+  for (let i = 0; i < ta.waters.length; i++) {
+    if (ta.waters[i].tide) taTide += 1;
+    else taStill += 1;
+  }
+  if (taStill < 1) throw new Error('塔廊 needs static 水洼');
+  if (taTide) throw new Error('塔廊 no tide');
+  let taCore = 0;
+  let taHeal = 0;
+  let taThick = 0;
+  let taTowerItem = 0;
+  let taFlowerItem = 0;
+  let taHammerItem = 0;
+  let taAnchorItem = 0;
+  let taArrowItem = 0;
+  let taBowlItem = 0;
+  let taMoonItem = 0;
+  let taWingItem = 0;
+  let taArchItem = 0;
+  let taGateItem = 0;
+  let taCurtainItem = 0;
+  let taCoilItem = 0;
+  let taFrameItem = 0;
+  let taCrossItem = 0;
+  let taStarItem = 0;
+  let taWaveItem = 0;
+  for (let i = 0; i < ta.crates.length; i++) {
+    if (ta.crates[i].loot === 'core') taCore += 1;
+    if (ta.crates[i].loot === 'heal') taHeal += 1;
+    if (ta.crates[i].thick) taThick += 1;
+  }
+  for (let i = 0; i < ta.items.length; i++) {
+    if (ta.items[i].kind === 'tower') taTowerItem += 1;
+    if (ta.items[i].kind === 'flower') taFlowerItem += 1;
+    if (ta.items[i].kind === 'hammer') taHammerItem += 1;
+    if (ta.items[i].kind === 'anchor') taAnchorItem += 1;
+    if (ta.items[i].kind === 'arrow') taArrowItem += 1;
+    if (ta.items[i].kind === 'bowl') taBowlItem += 1;
+    if (ta.items[i].kind === 'moon') taMoonItem += 1;
+    if (ta.items[i].kind === 'wing') taWingItem += 1;
+    if (ta.items[i].kind === 'arch') taArchItem += 1;
+    if (ta.items[i].kind === 'gate') taGateItem += 1;
+    if (ta.items[i].kind === 'curtain') taCurtainItem += 1;
+    if (ta.items[i].kind === 'coil') taCoilItem += 1;
+    if (ta.items[i].kind === 'frame') taFrameItem += 1;
+    if (ta.items[i].kind === 'cross') taCrossItem += 1;
+    if (ta.items[i].kind === 'star') taStarItem += 1;
+    if (ta.items[i].kind === 'wave') taWaveItem += 1;
+  }
+  if (taTowerItem < 1) throw new Error('塔廊 needs 塔爆');
+  if (taFlowerItem || taHammerItem || taAnchorItem || taArrowItem || taBowlItem || taMoonItem || taWingItem || taArchItem || taGateItem || taCurtainItem || taCoilItem || taFrameItem || taCrossItem || taStarItem || taWaveItem) throw new Error('塔廊 no extra pickup');
+  if (taCore !== 1) throw new Error('塔廊 心核');
+  if (taHeal < 1) throw new Error('塔廊 回星');
+  const taBox = ta.crates.find(function (c) { return c.loot === 'core'; });
+  if (!taBox || taBox.thick) throw new Error('塔廊 心核 crate is not thick');
+  if (taThick) throw new Error('塔廊 no thick crate');
+  let taHound = 0;
+  let taGuard = 0;
+  let taMoth = 0;
+  let taEater = 0;
+  let taShell = 0;
+  let taBoomer = 0;
+  for (let i = 0; i < ta.enemies.length; i++) {
+    if (isHound(ta.enemies[i])) taHound += 1;
+    else if (isMoth(ta.enemies[i])) taMoth += 1;
+    else if (isEater(ta.enemies[i])) taEater += 1;
+    else if (isShell(ta.enemies[i])) taShell += 1;
+    else if (isBoomer(ta.enemies[i])) taBoomer += 1;
+    else taGuard += 1;
+  }
+  if (taGuard !== 5 || taHound !== 0 || taMoth !== 0 || taEater !== 0 || taShell !== 0 || taBoomer !== 0) {
+    throw new Error('塔廊 烬卫 only');
+  }
+  if (inWater(ta, 100, 200) || inOil(ta, 100, 200)) throw new Error('塔廊 spawn dry');
+  if (inWater(ta, 200, 200) || inOil(ta, 200, 200)) throw new Error('塔廊 塔爆 dry');
+  if (inWater(ta, 400, 300) || inOil(ta, 400, 300)) throw new Error('塔廊 plant dry');
+  if (inOil(ta, 860, 300) || inWater(ta, 860, 300)) throw new Error('塔廊 core dry');
+  if (inWater(ta, 400, 250) || inOil(ta, 400, 250)) throw new Error('塔廊 烬卫 dry 0');
+  if (inWater(ta, 400, 200) || inOil(ta, 400, 200)) throw new Error('塔廊 烬卫 dry 1');
+  if (inWater(ta, 400, 150) || inOil(ta, 400, 150)) throw new Error('塔廊 烬卫 dry 2');
+  if (inWater(ta, 400, 100) || inOil(ta, 400, 100)) throw new Error('塔廊 烬卫 dry 3');
+  if (inWater(ta, 400, 50) || inOil(ta, 400, 50)) throw new Error('塔廊 烬卫 dry 4');
+  if (!inWater(ta, 830, 105)) throw new Error('塔廊 wet bag');
+  if (inWater(ta, 100, 200)) throw new Error('塔廊 west pocket wet');
+  for (let i = 0; i < ta.crates.length; i++) {
+    const c = ta.crates[i];
+    if (circleRect(ta.player.x, ta.player.y, ta.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('塔廊 crate on spawn');
+    }
+  }
+  for (let x = 100; x <= 400; x += 10) {
+    for (let i = 0; i < ta.crates.length; i++) {
+      const c = ta.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('塔廊 crate on dry walk');
+      }
+    }
+  }
+  for (let x = 200; x <= 400; x += 10) {
+    for (let i = 0; i < ta.crates.length; i++) {
+      const c = ta.crates[i];
+      if (circleRect(x, 300, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('塔廊 crate on plant walk');
+      }
+    }
+  }
+  const ta0 = ta.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 250) < 1; });
+  const ta1 = ta.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 200) < 1; });
+  const ta2 = ta.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 150) < 1; });
+  const ta3 = ta.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 100) < 1; });
+  const ta4 = ta.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 50) < 1; });
+  if (!ta0 || !ta1 || !ta2 || !ta3 || !ta4) throw new Error('塔廊 five 烬卫 seats');
+  const taSeats = [ta0, ta1, ta2, ta3, ta4];
+  if (Math.abs(dist(400, 300, 400, 250) - 50) > 1e-6) throw new Error('plant-to-base 50');
+  if (Math.abs(dist(400, 300, ta0.x, ta0.y) - TOWER_GAP) > 1e-6) throw new Error('塔廊 plant-to-base TOWER_GAP');
+  for (let i = 0; i < taSeats.length; i++) {
+    const e = taSeats[i];
+    if (e.x < 40 || e.y < 40 || e.x > 960 - 40 || e.y > 400 - 40) throw new Error('塔廊 烬卫 margin');
+  }
+  const towerSeatPos = [];
+  for (let k = 0; k < TOWER_N; k++) {
+    const tx = 400;
+    const ty = 300 - TOWER_GAP * (k + 1);
+    towerSeatPos.push([Math.round(tx), Math.round(ty)]);
+  }
+  if (Math.abs(towerSeatPos[0][0] - 400) > 1e-6 || Math.abs(towerSeatPos[0][1] - 250) > 1e-6) throw new Error('tower formula 0');
+  if (Math.abs(towerSeatPos[1][0] - 400) > 1e-6 || Math.abs(towerSeatPos[1][1] - 200) > 1e-6) throw new Error('tower formula 1');
+  if (Math.abs(towerSeatPos[2][0] - 400) > 1e-6 || Math.abs(towerSeatPos[2][1] - 150) > 1e-6) throw new Error('tower formula 2');
+  if (Math.abs(towerSeatPos[3][0] - 400) > 1e-6 || Math.abs(towerSeatPos[3][1] - 100) > 1e-6) throw new Error('tower formula 3');
+  if (Math.abs(towerSeatPos[4][0] - 400) > 1e-6 || Math.abs(towerSeatPos[4][1] - 50) > 1e-6) throw new Error('tower formula 4');
+  for (let i = 0; i < taSeats.length; i++) {
+    const e = taSeats[i];
+    let hit = false;
+    for (let k = 0; k < towerSeatPos.length; k++) {
+      if (dist(e.x, e.y, towerSeatPos[k][0], towerSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('塔廊 hot tower reaches 烬卫');
+  }
+  const taGround = ta.items.find(function (it) { return it.kind === 'tower' && !it.taken; });
+  if (!taGround) throw new Error('塔廊 ground 塔爆 present');
+  if (Math.abs(taGround.x - 200) > 1e-6 || Math.abs(taGround.y - 200) > 1e-6) throw new Error('塔廊 pickup seat');
+  let taPickGuard = 1e9;
+  for (let i = 0; i < taSeats.length; i++) {
+    const d = dist(taGround.x, taGround.y, taSeats[i].x, taSeats[i].y);
+    if (d < taPickGuard) taPickGuard = d;
+  }
+  if (taPickGuard <= HOT_BLAST_R + ENEMY_R) throw new Error('塔廊 pickup too close to seat');
+  const taCoreCx = taBox.x + taBox.w * 0.5;
+  const taCoreCy = taBox.y + taBox.h * 0.5;
+  if (!(dist(taCoreCx, taCoreCy, 400, 300) > HOT_BLAST_R)) throw new Error('塔廊 core outside plant blast');
+  if (!(dist(taCoreCx, taCoreCy, 400, 250) > HOT_BLAST_R)) throw new Error('塔廊 core outside tower');
+  ta.player.x = 100;
+  ta.player.y = 200;
+  ta.player.hearts = 3;
+  ta.player.inv = 2;
+  ta.hitstop = 0;
+  ta.embers.length = 0;
+  ta.player.x = taGround.x;
+  ta.player.y = taGround.y;
+  update(ta, 0.016);
+  if (ta.towerReady !== true) throw new Error('pick tower → towerReady');
+  if (ta.toast !== TOAST.towerGet) throw new Error('捡到塔爆 room');
+  ta.player.x = 100;
+  ta.player.y = 200;
+  ta.player.inv = 2;
+  ta.hitstop = 0;
+  ta.embers.length = 0;
+  const taHp0 = ta0.hp;
+  const taHp1 = ta1.hp;
+  const taHp2 = ta2.hp;
+  const taHp3 = ta3.hp;
+  const taHp4 = ta4.hp;
+  explode(ta, 400, 300, false);
+  if (ta.towerReady) throw new Error('塔廊 tower spends');
+  if (ta.toast !== TOAST.towerUse) throw new Error('塔立起来了 room');
+  if (!ta.towers || ta.towers.length !== TOWER_WAVES * TOWER_N) throw new Error('塔廊 towers queued');
+  if (Math.abs(ta.towers[0].x - 400) > 1e-6 || Math.abs(ta.towers[0].y - 250) > 1e-6) throw new Error('塔廊 seat 0');
+  if (Math.abs(ta.towers[1].x - 400) > 1e-6 || Math.abs(ta.towers[1].y - 200) > 1e-6) throw new Error('塔廊 seat 1');
+  if (Math.abs(ta.towers[2].x - 400) > 1e-6 || Math.abs(ta.towers[2].y - 150) > 1e-6) throw new Error('塔廊 seat 2');
+  if (Math.abs(ta.towers[3].x - 400) > 1e-6 || Math.abs(ta.towers[3].y - 100) > 1e-6) throw new Error('塔廊 seat 3');
+  if (Math.abs(ta.towers[4].x - 400) > 1e-6 || Math.abs(ta.towers[4].y - 50) > 1e-6) throw new Error('塔廊 seat 4');
+  if (Math.abs(ta.towers[5].x - 400) > 1e-6 || Math.abs(ta.towers[5].y - 250) > 1e-6) throw new Error('塔廊 seat 5');
+  if (Math.abs(ta.towers[10].x - 400) > 1e-6 || Math.abs(ta.towers[10].y - 250) > 1e-6) throw new Error('塔廊 seat 10');
+  if (Math.abs(ta.towers[0].t - TOWER_DT) > 1e-6) throw new Error('塔廊 dt 1');
+  if (Math.abs(ta.towers[1].t - TOWER_DT * 2) > 1e-6) throw new Error('塔廊 dt 2');
+  if (Math.abs(ta.towers[14].t - TOWER_DT * 15) > 1e-6) throw new Error('塔廊 dt 15');
+  if (ta0.hp !== taHp0 || ta1.hp !== taHp1 || ta2.hp !== taHp2 || ta3.hp !== taHp3 || ta4.hp !== taHp4) {
+    throw new Error('塔廊 primary misses');
+  }
+  ta.hitstop = 0;
+  updateTowers(ta, TOWER_DT + 0.01);
+  if (ta.towers.length !== 14) throw new Error('塔廊 first tower 0');
+  if (!(ta0.hp === taHp0 - 2 || ta0.hp <= 0)) throw new Error('塔廊 0 first seat');
+  ta0.x = 400;
+  ta0.y = 250;
+  ta1.x = 400;
+  ta1.y = 200;
+  ta2.x = 400;
+  ta2.y = 150;
+  ta3.x = 400;
+  ta3.y = 100;
+  ta4.x = 400;
+  ta4.y = 50;
+  ta.hitstop = 0;
+  updateTowers(ta, TOWER_DT * 14 + 0.05);
+  if (ta.towers.length !== 0) throw new Error('塔廊 towers finish');
+  if (ta0.hp > 0) throw new Error('塔廊 tower dmg 0');
+  if (ta1.hp > 0) throw new Error('塔廊 tower dmg 1');
+  if (ta2.hp > 0) throw new Error('塔廊 tower dmg 2');
+  if (ta3.hp > 0) throw new Error('塔廊 tower dmg 3');
+  if (ta4.hp > 0) throw new Error('塔廊 tower dmg 4');
+  ta.towerReady = true;
+  dropSpark(ta, 200, 200, false);
+  if (ta.towerReady !== true) throw new Error('dropSpark keeps 塔爆');
+  ta.input.dash = true;
+  ta.player.dashT = 0;
+  ta.player.dashCd = 0;
+  ta.hitstop = 0;
+  update(ta, 0.016);
+  if (ta.towerReady !== true) throw new Error('dash does not consume 塔爆');
+  const towerSelf = makeState();
+  resetRoom(towerSelf, 0, false);
+  towerSelf.towerReady = true;
+  towerSelf.player.x = 400;
+  towerSelf.player.y = 250;
+  towerSelf.player.inv = 0;
+  towerSelf.player.hearts = 3;
+  explode(towerSelf, 400, 300, false);
+  if (towerSelf.player.hearts !== 3) throw new Error('primary dry misses player for tower');
+  towerSelf.hitstop = 0;
+  updateTowers(towerSelf, TOWER_DT + 0.01);
+  if (towerSelf.player.hearts !== 2) throw new Error('own tower hurts player');
+  towerSelf.player.hearts = 3;
+  towerSelf.player.inv = 0;
+  towerSelf.player.dashT = DASH_TIME;
+  towerSelf.towers = [{ x: 400, y: 250, t: 0, ox: 400, oy: 300 }];
+  towerSelf.hitstop = 0;
+  updateTowers(towerSelf, 0.02);
+  if (towerSelf.player.hearts !== 3) throw new Error('dash i-frames skip tower');
+  ta.towerReady = true;
+  ta.sparks.length = 0;
+  if (ta.towers) ta.towers.length = 0;
+  ta.player.x = 100;
+  ta.player.y = 200;
+  ta.player.dashT = 0;
+  ta.player.dashCd = 0;
+  ta.player.vx = 0;
+  ta.player.vy = 0;
+  ta.player.inv = 2;
+  ta.input.x = 0;
+  ta.input.y = 0;
+  ta.input.dash = false;
+  ta.hitstop = 0;
+  ta.waters = [{ x: 60, y: 160, w: 80, h: 80 }];
+  dropSpark(ta, 100, 180, false);
+  if (!ta.sparks[ta.sparks.length - 1].wet) throw new Error('塔廊 wet spark');
+  const taBooms = ta.stats.booms;
+  for (let i = 0; i < 24; i++) update(ta, 0.1);
+  if (ta.towerReady !== true) throw new Error('塔廊 wet fizzle does not consume');
+  if (ta.stats.booms !== taBooms) throw new Error('塔廊 wet no extra boom');
+  ta.waters = [];
+  explode(ta, 200, 200, false, false, false, { fork: true });
+  if (ta.towerReady !== true) throw new Error('塔廊 fork does not consume');
+  ta.echoReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  for (let i = 0; i < 12; i++) update(ta, 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 echo does not consume');
+  ta.fanReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateFans(ta, FAN_DT * FAN_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 fan-fork does not consume');
+  ta.drumReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateDrums(ta, 0.55);
+  if (ta.towerReady !== true) throw new Error('塔廊 drum-wave does not consume');
+  ta.pulseReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updatePulses(ta, PULSE_DT * PULSE_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 pulse-aftershock does not consume');
+  ta.rainReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateRains(ta, RAIN_DT * RAIN_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 rain-drop does not consume');
+  ta.springReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateSprings(ta, SPRING_DT * SPRING_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 spring-jet does not consume');
+  ta.waveReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateWaves(ta, WAVE_DT * WAVE_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 wave-seat does not consume');
+  ta.starReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateStars(ta, STAR_DT * STAR_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 star-seat does not consume');
+  ta.crossReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateCrosses(ta, CROSS_DT * CROSS_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 cross-seat does not consume');
+  ta.frameReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateFrames(ta, FRAME_DT * 8 + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 frame-seat does not consume');
+  ta.coilReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateCoils(ta, COIL_DT * COIL_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 coil-seat does not consume');
+  ta.curtainReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateCurtains(ta, CURTAIN_DT * CURTAIN_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 curtain-seat does not consume');
+  ta.gateReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateGates(ta, GATE_DT * GATE_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 gate-seat does not consume');
+  ta.archReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateArches(ta, ARCH_DT * ARCH_WAVES * ARCH_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 arch-seat does not consume');
+  ta.wingReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateWings(ta, WING_DT * WING_WAVES * WING_N * 2 + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 wing-seat does not consume');
+  ta.moonReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateMoons(ta, MOON_DT * MOON_WAVES * MOON_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 moon-seat does not consume');
+  ta.bowlReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateBowls(ta, BOWL_DT * BOWL_WAVES * BOWL_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 bowl-seat does not consume');
+  ta.arrowReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateArrows(ta, ARROW_DT * ARROW_WAVES * ARROW_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 arrow-seat does not consume');
+  ta.anchorReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateAnchors(ta, ANCHOR_DT * ANCHOR_WAVES * ANCHOR_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 anchor-seat does not consume');
+  ta.hammerReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateHammers(ta, HAMMER_DT * HAMMER_WAVES * HAMMER_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 hammer-seat does not consume');
+  ta.flowerReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateFlowers(ta, FLOWER_DT * FLOWER_WAVES * FLOWER_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 flower-seat does not consume');
+  ta.spinReady = true;
+  explode(ta, 200, 200, false);
+  ta.towerReady = true;
+  ta.hitstop = 0;
+  updateSpins(ta, SPIN_DT * SPIN_N + 0.05);
+  if (ta.towerReady !== true) throw new Error('塔廊 spin-orbit does not consume');
+  ta.waters = [];
+  explode(ta, taBox.x + taBox.w * 0.5, taBox.y - 20, false);
+  if (!taBox.open) throw new Error('塔廊 dry trail should open 心核');
+  takeCore(ta, { x: 100, y: 100 });
+  if (!ta.won || ta.toast !== TOAST.all) throw new Error('塔廊 should 通关');
+  const hudTa = makeState();
+  resetRoom(hudTa, 57, false);
+  if (roomHudText(hudTa).indexOf('塔廊 · 58/') !== 0) throw new Error('HUD 塔廊 58/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (TOWER_N !== 5) throw new Error('TOWER_N 5');
+  if (TOWER_GAP !== 50) throw new Error('TOWER_GAP 50');
+  if (TOWER_WAVES !== 3) throw new Error('TOWER_WAVES 3');
+  if (TOWER_DT !== 0.10) throw new Error('TOWER_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.towerGet !== '捡到塔爆') throw new Error('捡到塔爆');
+  if (TOAST.towerUse !== '塔立起来了') throw new Error('塔立起来了 toast');
+  if (TOAST.towerRoom !== '塔廊试锋') throw new Error('塔廊试锋');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
