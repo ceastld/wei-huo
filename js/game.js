@@ -112,6 +112,10 @@ const HAMMER_GAP = 90;
 const HAMMER_HEAD = 90;
 const HAMMER_WAVES = 3;
 const HAMMER_DT = 0.10;
+const FLOWER_N = 5;
+const FLOWER_R = 120;
+const FLOWER_WAVES = 3;
+const FLOWER_DT = 0.10;
 const TIDE_LOW = 2.8;
 const TIDE_HIGH = 1.2;
 const SPARK_GAP = 18;
@@ -218,6 +222,7 @@ const NAMES = {
   arrow: '箭爆',
   anchor: '锚爆',
   hammer: '锤爆',
+  flower: '花爆',
   eater: '拾烬',
   shell: '壳卫',
   boomer: '爆卫',
@@ -382,6 +387,9 @@ const TOAST = {
   hammerGet: '捡到锤爆',
   hammerUse: '锤已落下',
   hammerRoom: '锤廊试锋',
+  flowerGet: '捡到花爆',
+  flowerUse: '花开了',
+  flowerRoom: '花廊试锋',
   eater: '拾烬倒了',
   eaterEat: '拾烬吃辙',
   eaterRoom: '拾烬会吃辙',
@@ -435,6 +443,7 @@ const COL = {
   arrow: '#ff5c6a',
   anchor: '#5ecfc4',
   hammer: '#a78bfa',
+  flower: '#ff7aa2',
   water: '#3a6b8c',
   oil: '#8a4a12',
   eater: '#9a6ab0',
@@ -706,6 +715,7 @@ function lootKind(drop) {
   if (drop === '箭爆' || drop === 'arrow') return 'arrow';
   if (drop === '锚爆' || drop === 'anchor') return 'anchor';
   if (drop === '锤爆' || drop === 'hammer') return 'hammer';
+  if (drop === '花爆' || drop === 'flower') return 'flower';
   return null;
 }
 
@@ -794,6 +804,7 @@ function makeState() {
     arrowReady: false,
     anchorReady: false,
     hammerReady: false,
+    flowerReady: false,
     baits: [],
     bolts: [],
     trips: [],
@@ -821,6 +832,7 @@ function makeState() {
     arrows: [],
     anchors: [],
     hammers: [],
+    flowers: [],
     boomerFuses: [],
     echoes: [],
     echoing: false,
@@ -959,6 +971,7 @@ function resetRoom(s, index, keepHearts) {
   s.arrowReady = false;
   s.anchorReady = false;
   s.hammerReady = false;
+  s.flowerReady = false;
   s.echoing = false;
   s.splitting = false;
   if (!s.echoes) s.echoes = [];
@@ -1023,6 +1036,8 @@ function resetRoom(s, index, keepHearts) {
   s.anchors.length = 0;
   if (!s.hammers) s.hammers = [];
   s.hammers.length = 0;
+  if (!s.flowers) s.flowers = [];
+  s.flowers.length = 0;
   if (!s.boomerFuses) s.boomerFuses = [];
   s.boomerFuses.length = 0;
   s.sparks.length = 0;
@@ -1158,6 +1173,7 @@ function resetRoom(s, index, keepHearts) {
   else if (room.name === '箭廊') toast(s, TOAST.arrowRoom, 1.4, COL.arrow);
   else if (room.name === '锚廊') toast(s, TOAST.anchorRoom, 1.4, COL.anchor);
   else if (room.name === '锤廊') toast(s, TOAST.hammerRoom, 1.4, COL.hammer);
+  else if (room.name === '花廊') toast(s, TOAST.flowerRoom, 1.4, COL.flower);
   else if (room.name === '夹道' && !s.taughtDash) {
     toast(s, TOAST.dashSafe, 1.4, COL.ember);
     s.taughtDash = true;
@@ -2232,6 +2248,32 @@ function updateHammers(s, dt) {
   }
 }
 
+function updateFlowers(s, dt) {
+  if (!s.flowers || !s.flowers.length) return;
+  const fires = [];
+  for (let i = s.flowers.length - 1; i >= 0; i--) {
+    const p = s.flowers[i];
+    p.t -= dt;
+    if (p.t <= 0) {
+      fires.push(p);
+      s.flowers.splice(i, 1);
+    } else if (!reducedMotion() && Math.random() < dt * 6) {
+      burst(s, p.x + (Math.random() - 0.5) * 10, p.y + (Math.random() - 0.5) * 10, 1, COL.flower, 40);
+    }
+  }
+  fires.reverse();
+  for (let i = 0; i < fires.length; i++) {
+    const p = fires[i];
+    const hx = clamp(p.x, 0, s.roomW || VIEW_W);
+    const hy = clamp(p.y, 0, s.roomH || VIEW_H);
+    explode(s, hx, hy, true, true, false, { fork: true });
+    if (!reducedMotion()) {
+      punch(s, 5);
+      burst(s, hx, hy, 5, COL.flower, 160);
+    }
+  }
+}
+
 function drumHurtEnemy(s, e, ox, oy) {
   if (!e || e.hp <= 0) return;
   if (isShell(e)) {
@@ -2489,6 +2531,11 @@ function explode(s, x, y, hot, fused, haste, opts) {
   if (!forked && s.hammerReady) {
     s.hammerReady = false;
     hammering = true;
+  }
+  let flowering = false;
+  if (!forked && s.flowerReady) {
+    s.flowerReady = false;
+    flowering = true;
   }
   const boomR = halo ? RING_OUT : r;
   s.stats.booms += 1;
@@ -3393,6 +3440,30 @@ function explode(s, x, y, hot, fused, haste, opts) {
       burst(s, x, y, 4, '#ffffff', 160);
     }
   }
+  if (flowering) {
+    if (!s.flowers) s.flowers = [];
+    for (let w = 0; w < FLOWER_WAVES; w++) {
+      for (let k = 0; k < FLOWER_N; k++) {
+        const ang = -Math.PI / 2 + k * (Math.PI * 2 / FLOWER_N);
+        const fx = x + FLOWER_R * Math.cos(ang);
+        const fy = y + FLOWER_R * Math.sin(ang);
+        s.flowers.push({
+          x: Math.round(fx),
+          y: Math.round(fy),
+          t: FLOWER_DT * (w * FLOWER_N + k + 1),
+          ox: x,
+          oy: y,
+        });
+      }
+    }
+    toast(s, TOAST.flowerUse, 1.1, COL.flower);
+    if (!reducedMotion()) {
+      punch(s, 8);
+      s.hitstop = Math.max(s.hitstop, 0.05);
+      burst(s, x, y, 6, COL.flower, 170);
+      burst(s, x, y, 4, '#ffffff', 160);
+    }
+  }
 }
 
 function pendingFuse(s) {
@@ -3681,6 +3752,7 @@ function watchSteer(s, dt) {
   let arrowIt = null;
   let anchorIt = null;
   let hammerIt = null;
+  let flowerIt = null;
   for (let i = 0; i < s.items.length; i++) {
     const it = s.items[i];
     if (it.taken) continue;
@@ -3723,8 +3795,9 @@ function watchSteer(s, dt) {
     if (it.kind === 'arrow') arrowIt = it;
     if (it.kind === 'anchor') anchorIt = it;
     if (it.kind === 'hammer') hammerIt = it;
+    if (it.kind === 'flower') flowerIt = it;
   }
-  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt) || (!s.arrowReady && arrowIt) || (!s.anchorReady && anchorIt) || (!s.hammerReady && hammerIt);
+  const grab = core || (!s.seed && seedIt) || (!s.hasteReady && hasteIt) || (!s.echoReady && echoIt) || (!s.suckReady && suckIt) || (!s.dashBoomReady && dashBoomIt) || (!s.splitReady && splitIt) || (!s.pierceReady && pierceIt) || (!s.haloReady && haloIt) || (!s.frostReady && frostIt) || (!s.shoveReady && shoveIt) || (!s.baitReady && baitIt) || (!s.boltReady && boltIt) || (!s.tripReady && tripIt) || (!s.delayReady && delayIt) || (!s.bounceReady && bounceIt) || (!s.rollReady && rollIt) || (!s.mirrorReady && mirrorIt) || (!s.spinReady && spinIt) || (!s.poolReady && poolIt) || (!s.fanReady && fanIt) || (!s.drumReady && drumIt) || (!s.pulseReady && pulseIt) || (!s.rainReady && rainIt) || (!s.springReady && springIt) || (!s.waveReady && waveIt) || (!s.starReady && starIt) || (!s.crossReady && crossIt) || (!s.frameReady && frameIt) || (!s.coilReady && coilIt) || (!s.curtainReady && curtainIt) || (!s.gateReady && gateIt) || (!s.archReady && archIt) || (!s.wingReady && wingIt) || (!s.moonReady && moonIt) || (!s.bowlReady && bowlIt) || (!s.arrowReady && arrowIt) || (!s.anchorReady && anchorIt) || (!s.hammerReady && hammerIt) || (!s.flowerReady && flowerIt);
 
   let guard = null;
   let gd = 1e9;
@@ -3914,6 +3987,10 @@ function watchSteer(s, dt) {
   } else if (!s.hammerReady && hammerIt) {
     tx = hammerIt.x - p.x;
     ty = hammerIt.y - p.y;
+    if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
+  } else if (!s.flowerReady && flowerIt) {
+    tx = flowerIt.x - p.x;
+    ty = flowerIt.y - p.y;
     if (threat && p.dashT <= 0 && p.dashCd <= 0) dash = true;
   } else if (guard && isShell(guard)) {
     tx = guard.x - p.x;
@@ -4110,6 +4187,7 @@ function update(s, dt) {
     updateArrows(s, dt);
     updateAnchors(s, dt);
     updateHammers(s, dt);
+    updateFlowers(s, dt);
     updateBoomerFuses(s, dt);
     if (s.pendingNext <= 0) goNext(s);
     return;
@@ -4147,6 +4225,7 @@ function update(s, dt) {
     updateArrows(s, dt);
     updateAnchors(s, dt);
     updateHammers(s, dt);
+    updateFlowers(s, dt);
     updateBoomerFuses(s, dt);
     return;
   }
@@ -4276,6 +4355,7 @@ function update(s, dt) {
   updateArrows(s, dt);
   updateAnchors(s, dt);
   updateHammers(s, dt);
+  updateFlowers(s, dt);
   updateBoomerFuses(s, dt);
 
   for (let i = 0; i < s.enemies.length; i++) {
@@ -4581,6 +4661,13 @@ function update(s, dt) {
       toast(s, TOAST.hammerGet, 1.1, COL.hammer);
       sfx('pickup');
       burst(s, it.x, it.y, 6, COL.hammer, 130);
+      burst(s, it.x, it.y, 4, '#ffffff', 110);
+      punch(s, 3);
+    } else if (it.kind === 'flower') {
+      s.flowerReady = true;
+      toast(s, TOAST.flowerGet, 1.1, COL.flower);
+      sfx('pickup');
+      burst(s, it.x, it.y, 6, COL.flower, 130);
       burst(s, it.x, it.y, 4, '#ffffff', 110);
       punch(s, 3);
     } else if (it.kind === 'heal') {
@@ -5555,6 +5642,25 @@ function draw(s, ctx) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(NAMES.hammer, it.x, it.y - 16);
+    } else if (it.kind === 'flower') {
+      glow(ctx, it.x, it.y, 18 * pulse, COL.flower, 0.7);
+      glow(ctx, it.x, it.y, 8, '#ffffff', 0.35);
+      ctx.fillStyle = COL.flower;
+      ctx.beginPath();
+      ctx.arc(it.x, it.y, 6 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      for (let k = 0; k < 5; k++) {
+        const ang = -Math.PI / 2 + k * (Math.PI * 2 / 5);
+        ctx.beginPath();
+        ctx.arc(it.x + Math.cos(ang) * 3.4, it.y + Math.sin(ang) * 3.4, 1.6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = COL.flower;
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(NAMES.flower, it.x, it.y - 16);
     } else {
       glow(ctx, it.x, it.y, 18, COL.gold, 0.5);
       ctx.fillStyle = COL.gold;
@@ -6577,6 +6683,41 @@ function draw(s, ctx) {
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('锤', p.x, p.y - 12);
+    }
+  }
+
+  if (s.flowers && s.flowers.length) {
+    for (let i = 0; i < s.flowers.length; i++) {
+      const p = s.flowers[i];
+      const maxT = FLOWER_DT * FLOWER_WAVES * FLOWER_N;
+      const u = Math.max(0, p.t) / maxT;
+      const ox = p.ox != null ? p.ox : p.x;
+      const oy = p.oy != null ? p.oy : p.y;
+      const dx = p.x - ox;
+      const dy = p.y - oy;
+      const len = Math.hypot(dx, dy) || 1;
+      const x1 = p.x - (dx / len) * 28;
+      const y1 = p.y - (dy / len) * 28;
+      if (!reducedMotion()) glow(ctx, (x1 + p.x) * 0.5, (y1 + p.y) * 0.5, 18, COL.flower, 0.28);
+      ctx.strokeStyle = COL.flower;
+      ctx.globalAlpha = reducedMotion() ? 0.7 : 0.35 + 0.45 * u;
+      ctx.lineWidth = 2.2 / fit.scale;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      if (!reducedMotion()) {
+        ctx.fillStyle = COL.flower;
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 + 3 * u, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.flower;
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('花', p.x, p.y - 12);
     }
   }
 
@@ -7713,6 +7854,32 @@ function draw(s, ctx) {
     ctx.lineTo(hx - 1.4, hy + 2.0);
     ctx.stroke();
   }
+  if (s.flowerReady) {
+    let fx;
+    let fy;
+    if (reducedMotion()) {
+      fx = p.x;
+      fy = p.y + 14;
+    } else {
+      const a = s.time * 5.2 + Math.PI * 1.7 + Math.PI * 0.2 + Math.PI * 0.35 + Math.PI * 0.55 + Math.PI * 0.7 + Math.PI * 0.9 + Math.PI * 1.1 + Math.PI * 1.3 + Math.PI * 1.5 + Math.PI * 1.7 + Math.PI * 1.95 + Math.PI * 2.15 + Math.PI * 2.4 + Math.PI * 2.65 + Math.PI * 2.9 + Math.PI * 3.15 + Math.PI * 3.4 + Math.PI * 3.65 + Math.PI * 3.9 + Math.PI * 4.15 + Math.PI * 4.4 + Math.PI * 4.65 + Math.PI * 4.9 + Math.PI * 5.15 + Math.PI * 5.4 + Math.PI * 5.65 + Math.PI * 5.9 + Math.PI * 6.15 + Math.PI * 6.4 + Math.PI * 6.65 + Math.PI * 6.9 + Math.PI * 7.15 + Math.PI * 7.4 + Math.PI * 7.65 + Math.PI * 7.9;
+      fx = p.x + Math.cos(a) * 16;
+      fy = p.y + Math.sin(a) * 16;
+    }
+    glow(ctx, fx, fy, 8, COL.flower, 0.55);
+    ctx.beginPath();
+    ctx.fillStyle = COL.flower;
+    ctx.arc(fx, fy, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    for (let k = 0; k < 5; k++) {
+      const ang = -Math.PI / 2 + k * (Math.PI * 2 / 5);
+      ctx.beginPath();
+      ctx.arc(fx + Math.cos(ang) * 1.8, fy + Math.sin(ang) * 1.8, 0.8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
 
   for (let i = 0; i < s.parts.length; i++) {
     const q = s.parts[i];
@@ -8239,6 +8406,16 @@ function syncHud(s, heartsEl, toastEl, roomEl, comboEl) {
   } else if (bowlEl && s.hammerReady && !s.bowlReady) {
     bowlEl.textContent = NAMES.hammer;
   }
+  const flowerEl = (typeof document !== 'undefined') ? document.getElementById('flower') : null;
+  if (flowerEl) {
+    flowerEl.textContent = s.flowerReady ? NAMES.flower : '';
+  } else if (hammerEl && s.flowerReady && !s.hammerReady) {
+    hammerEl.textContent = NAMES.flower;
+  } else if (anchorEl && s.flowerReady && !s.anchorReady) {
+    anchorEl.textContent = NAMES.flower;
+  } else if (arrowEl && s.flowerReady && !s.arrowReady) {
+    arrowEl.textContent = NAMES.flower;
+  }
   if (s.toast && (s.toastT > 0 || s.won || s.dead)) {
     toastEl.hidden = false;
     toastEl.textContent = s.toast + ((s.won || s.dead) ? '  ·  R 再玩' : '');
@@ -8433,10 +8610,14 @@ function selfCheck() {
   if (HAMMER_HEAD !== 90) throw new Error('HAMMER_HEAD 90');
   if (HAMMER_WAVES !== 3) throw new Error('HAMMER_WAVES 3');
   if (HAMMER_DT !== 0.10) throw new Error('HAMMER_DT 0.10');
+  if (FLOWER_N !== 5) throw new Error('FLOWER_N 5');
+  if (FLOWER_R !== 120) throw new Error('FLOWER_R 120');
+  if (FLOWER_WAVES !== 3) throw new Error('FLOWER_WAVES 3');
+  if (FLOWER_DT !== 0.10) throw new Error('FLOWER_DT 0.10');
   if (EMBER_T !== 0.55) throw new Error('EMBER_T 0.55');
   if (SCORCH_T !== 1.2) throw new Error('焦痕 1.2s');
-  if (!ROOMS || ROOMS.length !== 56) throw new Error('need 56 rooms, got ' + (ROOMS ? ROOMS.length : 0));
-  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊', '箭廊', '锚廊', '锤廊'];
+  if (!ROOMS || ROOMS.length !== 57) throw new Error('need 57 rooms, got ' + (ROOMS ? ROOMS.length : 0));
+  const want = ['空场', '追者', '水巷', '箱巷', '夹道', '夜市', '循径', '双刃', '回廊', '灯巷', '灰径', '环行', '密线', '潮廊', '种廊', '油廊', '急廊', '拾廊', '响廊', '吸廊', '冲廊', '裂廊', '贯廊', '晕廊', '冻廊', '推廊', '诱廊', '壳廊', '雷廊', '绊廊', '迟廊', '跳廊', '卷廊', '镜廊', '旋廊', '爆廊', '洼廊', '扇廊', '鼓廊', '脉廊', '雨廊', '泉廊', '波廊', '星廊', '叉廊', '框廊', '螺廊', '帘廊', '门廊', '拱廊', '翼廊', '月廊', '碗廊', '箭廊', '锚廊', '锤廊', '花廊'];
   for (let i = 0; i < want.length; i++) {
     if (!ROOMS[i] || ROOMS[i].name !== want[i]) {
       throw new Error('room ' + i + ' ' + (ROOMS[i] && ROOMS[i].name));
@@ -8538,6 +8719,8 @@ function selfCheck() {
   if (ROOMS[54].name !== '锚廊') throw new Error('room 55 锚廊');
   if (ROOMS[55].id !== 'chuilang') throw new Error('锤廊 id');
   if (ROOMS[55].name !== '锤廊') throw new Error('room 56 锤廊');
+  if (ROOMS[56].id !== 'hualang') throw new Error('花廊 id');
+  if (ROOMS[56].name !== '花廊') throw new Error('room 57 花廊');
   if (NAMES.delay !== '迟爆') throw new Error('NAMES.delay');
   if (COL.delay !== '#ff9a4a') throw new Error('COL.delay');
   if (NAMES.bounce !== '跳爆') throw new Error('NAMES.bounce');
@@ -8611,6 +8794,9 @@ function selfCheck() {
   if (NAMES.hammer !== '锤爆') throw new Error('NAMES.hammer');
   if (COL.hammer !== '#a78bfa') throw new Error('COL.hammer');
   if (lootKind('锤爆') !== 'hammer' || lootKind('hammer') !== 'hammer') throw new Error('lootKind 锤爆');
+  if (NAMES.flower !== '花爆') throw new Error('NAMES.flower');
+  if (COL.flower !== '#ff7aa2') throw new Error('COL.flower');
+  if (lootKind('花爆') !== 'flower' || lootKind('flower') !== 'flower') throw new Error('lootKind 花爆');
   if (SHELL_HP !== 2) throw new Error('SHELL_HP 2');
   if (SHELL_R !== 14) throw new Error('SHELL_R 14');
   if (NAMES.shell !== '壳卫') throw new Error('壳卫 name');
@@ -8633,7 +8819,7 @@ function selfCheck() {
   const fitK = roomFit({ roomW: 840, roomH: 480 });
   if (Math.abs(fitK.scale - Math.min(960 / 840, 540 / 480)) > 1e-9) throw new Error('kongchang letterbox');
 
-  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '箭爆', '锚爆', '锤爆', '壳卫', '爆卫'];
+  const need = ['尾火', '烬卫', '箱', '心核', '回星', '水洼', '油渍', '潮涌', '焰辙', '循辙', '灯蛾', '余烬', '焦痕', '观摩', '焰种', '急燃', '拾烬', '回爆', '吸爆', '冲爆', '裂爆', '贯爆', '环爆', '霜爆', '推爆', '诱爆', '雷爆', '绊爆', '迟爆', '跳爆', '卷爆', '镜爆', '旋爆', '洼爆', '临洼', '扇爆', '鼓爆', '脉爆', '雨爆', '泉爆', '波爆', '星爆', '叉爆', '框爆', '螺爆', '帘爆', '门爆', '拱爆', '翼爆', '月爆', '碗爆', '箭爆', '锚爆', '锤爆', '花爆', '壳卫', '爆卫'];
   const blob = Object.keys(NAMES).map(function (k) { return NAMES[k]; }).join('') +
     Object.keys(TOAST).map(function (k) { return TOAST[k]; }).join('');
   for (let i = 0; i < need.length; i++) {
@@ -10181,6 +10367,7 @@ function selfCheck() {
   if (lootKind('箭爆') !== 'arrow' || lootKind('arrow') !== 'arrow') throw new Error('lootKind 箭爆');
   if (lootKind('锚爆') !== 'anchor' || lootKind('anchor') !== 'anchor') throw new Error('lootKind 锚爆');
   if (lootKind('锤爆') !== 'hammer' || lootKind('hammer') !== 'hammer') throw new Error('lootKind 锤爆');
+  if (lootKind('花爆') !== 'flower' || lootKind('flower') !== 'flower') throw new Error('lootKind 花爆');
   if (TAIL_T !== 2) throw new Error('TAIL_T===2');
   if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
 
@@ -15643,6 +15830,7 @@ function selfCheck() {
   bothP.arrowReady = true;
   bothP.anchorReady = true;
   bothP.hammerReady = true;
+  bothP.flowerReady = true;
   bothP.player.x = 80;
   bothP.player.y = 80;
   bothP.player.inv = 2;
@@ -15666,6 +15854,7 @@ function selfCheck() {
   if (bothP.arrowReady) throw new Error('same boom spends 箭爆');
   if (bothP.anchorReady) throw new Error('same boom spends 锚爆');
   if (bothP.hammerReady) throw new Error('same boom spends 锤爆');
+  if (bothP.flowerReady) throw new Error('same boom spends 花爆');
   if (!bothP.fans || !bothP.fans.length) throw new Error('same boom fans');
   if (!bothP.drums || !bothP.drums.length) throw new Error('same boom drums');
   if (!bothP.pulses || bothP.pulses.length !== PULSE_N) throw new Error('same boom pulses');
@@ -15685,6 +15874,7 @@ function selfCheck() {
   if (!bothP.arrows || bothP.arrows.length !== ARROW_WAVES * ARROW_N) throw new Error('same boom arrows');
   if (!bothP.anchors || bothP.anchors.length !== ANCHOR_WAVES * ANCHOR_N) throw new Error('same boom anchors');
   if (!bothP.hammers || bothP.hammers.length !== HAMMER_WAVES * HAMMER_N) throw new Error('same boom hammers');
+  if (!bothP.flowers || bothP.flowers.length !== FLOWER_WAVES * FLOWER_N) throw new Error('same boom flowers');
   const pulseSelf = makeState();
   resetRoom(pulseSelf, 0, false);
   pulseSelf.pulseReady = true;
@@ -21065,6 +21255,7 @@ function selfCheck() {
   let chuiHeal = 0;
   let chuiThick = 0;
   let chuiHammerItem = 0;
+  let chuiFlowerItem = 0;
   let chuiAnchorItem = 0;
   let chuiArrowItem = 0;
   let chuiBowlItem = 0;
@@ -21085,6 +21276,7 @@ function selfCheck() {
   }
   for (let i = 0; i < chui.items.length; i++) {
     if (chui.items[i].kind === 'hammer') chuiHammerItem += 1;
+    if (chui.items[i].kind === 'flower') chuiFlowerItem += 1;
     if (chui.items[i].kind === 'anchor') chuiAnchorItem += 1;
     if (chui.items[i].kind === 'arrow') chuiArrowItem += 1;
     if (chui.items[i].kind === 'bowl') chuiBowlItem += 1;
@@ -21100,7 +21292,7 @@ function selfCheck() {
     if (chui.items[i].kind === 'wave') chuiWaveItem += 1;
   }
   if (chuiHammerItem < 1) throw new Error('锤廊 needs 锤爆');
-  if (chuiAnchorItem || chuiArrowItem || chuiBowlItem || chuiMoonItem || chuiWingItem || chuiArchItem || chuiGateItem || chuiCurtainItem || chuiCoilItem || chuiFrameItem || chuiCrossItem || chuiStarItem || chuiWaveItem) throw new Error('锤廊 no extra pickup');
+  if (chuiFlowerItem || chuiAnchorItem || chuiArrowItem || chuiBowlItem || chuiMoonItem || chuiWingItem || chuiArchItem || chuiGateItem || chuiCurtainItem || chuiCoilItem || chuiFrameItem || chuiCrossItem || chuiStarItem || chuiWaveItem) throw new Error('锤廊 no extra pickup');
   if (chuiCore !== 1) throw new Error('锤廊 心核');
   if (chuiHeal < 1) throw new Error('锤廊 回星');
   const chuiBox = chui.crates.find(function (c) { return c.loot === 'core'; });
@@ -21443,11 +21635,20 @@ function selfCheck() {
   chui.hitstop = 0;
   updateSpins(chui, SPIN_DT * SPIN_N + 0.05);
   if (chui.hammerReady !== true) throw new Error('锤廊 spin-orbit does not consume');
+  chui.flowerReady = true;
+  explode(chui, 200, 200, false);
+  chui.hammerReady = true;
+  chui.hitstop = 0;
+  updateFlowers(chui, FLOWER_DT * FLOWER_WAVES * FLOWER_N + 0.05);
+  if (chui.hammerReady !== true) throw new Error('锤廊 flower-seat does not consume');
   chui.waters = [];
   explode(chui, chuiBox.x + chuiBox.w * 0.5, chuiBox.y - 20, false);
   if (!chuiBox.open) throw new Error('锤廊 dry trail should open 心核');
   takeCore(chui, { x: 100, y: 100 });
-  if (!chui.won || chui.toast !== TOAST.all) throw new Error('锤廊 should 通关');
+  if (chui.won) throw new Error('锤廊 should not 通关');
+  if (chui.toast !== TOAST.core) throw new Error('锤廊 过关');
+  for (let i = 0; i < 20; i++) update(chui, 0.1);
+  if (chui.roomName !== '花廊') throw new Error('core advances to 花廊');
   const hudChui = makeState();
   resetRoom(hudChui, 55, false);
   if (roomHudText(hudChui).indexOf('锤廊 · 56/') !== 0) throw new Error('HUD 锤廊 56/n');
@@ -21463,6 +21664,417 @@ function selfCheck() {
   if (TOAST.hammerGet !== '捡到锤爆') throw new Error('捡到锤爆');
   if (TOAST.hammerUse !== '锤已落下') throw new Error('锤已落下 toast');
   if (TOAST.hammerRoom !== '锤廊试锋') throw new Error('锤廊试锋');
+
+  const hua = makeState();
+  resetRoom(hua, 56, false);
+  if (hua.roomName !== '花廊' || hua.roomId !== 'hualang') throw new Error('hualang load');
+  if (hua.toast !== TOAST.flowerRoom) throw new Error('花廊 intro');
+  if (hua.roomW !== 960 || hua.roomH !== 400) throw new Error('花廊 size');
+  if (hua.player.x !== 100 || hua.player.y !== 200) throw new Error('花廊 spawn');
+  if (hua.flowerReady) throw new Error('花廊 flower starts false');
+  if (!hua.flowers || hua.flowers.length) throw new Error('花廊 flowers start empty');
+  let huaStill = 0;
+  let huaTide = 0;
+  for (let i = 0; i < hua.waters.length; i++) {
+    if (hua.waters[i].tide) huaTide += 1;
+    else huaStill += 1;
+  }
+  if (huaStill < 1) throw new Error('花廊 needs static 水洼');
+  if (huaTide) throw new Error('花廊 no tide');
+  let huaCore = 0;
+  let huaHeal = 0;
+  let huaThick = 0;
+  let huaFlowerItem = 0;
+  let huaHammerItem = 0;
+  let huaAnchorItem = 0;
+  let huaArrowItem = 0;
+  let huaBowlItem = 0;
+  let huaMoonItem = 0;
+  let huaWingItem = 0;
+  let huaArchItem = 0;
+  let huaGateItem = 0;
+  let huaCurtainItem = 0;
+  let huaCoilItem = 0;
+  let huaFrameItem = 0;
+  let huaCrossItem = 0;
+  let huaStarItem = 0;
+  let huaWaveItem = 0;
+  for (let i = 0; i < hua.crates.length; i++) {
+    if (hua.crates[i].loot === 'core') huaCore += 1;
+    if (hua.crates[i].loot === 'heal') huaHeal += 1;
+    if (hua.crates[i].thick) huaThick += 1;
+  }
+  for (let i = 0; i < hua.items.length; i++) {
+    if (hua.items[i].kind === 'flower') huaFlowerItem += 1;
+    if (hua.items[i].kind === 'hammer') huaHammerItem += 1;
+    if (hua.items[i].kind === 'anchor') huaAnchorItem += 1;
+    if (hua.items[i].kind === 'arrow') huaArrowItem += 1;
+    if (hua.items[i].kind === 'bowl') huaBowlItem += 1;
+    if (hua.items[i].kind === 'moon') huaMoonItem += 1;
+    if (hua.items[i].kind === 'wing') huaWingItem += 1;
+    if (hua.items[i].kind === 'arch') huaArchItem += 1;
+    if (hua.items[i].kind === 'gate') huaGateItem += 1;
+    if (hua.items[i].kind === 'curtain') huaCurtainItem += 1;
+    if (hua.items[i].kind === 'coil') huaCoilItem += 1;
+    if (hua.items[i].kind === 'frame') huaFrameItem += 1;
+    if (hua.items[i].kind === 'cross') huaCrossItem += 1;
+    if (hua.items[i].kind === 'star') huaStarItem += 1;
+    if (hua.items[i].kind === 'wave') huaWaveItem += 1;
+  }
+  if (huaFlowerItem < 1) throw new Error('花廊 needs 花爆');
+  if (huaHammerItem || huaAnchorItem || huaArrowItem || huaBowlItem || huaMoonItem || huaWingItem || huaArchItem || huaGateItem || huaCurtainItem || huaCoilItem || huaFrameItem || huaCrossItem || huaStarItem || huaWaveItem) throw new Error('花廊 no extra pickup');
+  if (huaCore !== 1) throw new Error('花廊 心核');
+  if (huaHeal < 1) throw new Error('花廊 回星');
+  const huaBox = hua.crates.find(function (c) { return c.loot === 'core'; });
+  if (!huaBox || huaBox.thick) throw new Error('花廊 心核 crate is not thick');
+  if (huaThick) throw new Error('花廊 no thick crate');
+  let huaHound = 0;
+  let huaGuard = 0;
+  let huaMoth = 0;
+  let huaEater = 0;
+  let huaShell = 0;
+  let huaBoomer = 0;
+  for (let i = 0; i < hua.enemies.length; i++) {
+    if (isHound(hua.enemies[i])) huaHound += 1;
+    else if (isMoth(hua.enemies[i])) huaMoth += 1;
+    else if (isEater(hua.enemies[i])) huaEater += 1;
+    else if (isShell(hua.enemies[i])) huaShell += 1;
+    else if (isBoomer(hua.enemies[i])) huaBoomer += 1;
+    else huaGuard += 1;
+  }
+  if (huaGuard !== 5 || huaHound !== 0 || huaMoth !== 0 || huaEater !== 0 || huaShell !== 0 || huaBoomer !== 0) {
+    throw new Error('花廊 烬卫 only');
+  }
+  if (inWater(hua, 100, 200) || inOil(hua, 100, 200)) throw new Error('花廊 spawn dry');
+  if (inWater(hua, 200, 200) || inOil(hua, 200, 200)) throw new Error('花廊 花爆 dry');
+  if (inWater(hua, 400, 200) || inOil(hua, 400, 200)) throw new Error('花廊 plant dry');
+  if (inOil(hua, 860, 200) || inWater(hua, 860, 200)) throw new Error('花廊 core dry');
+  if (inWater(hua, 400, 80) || inOil(hua, 400, 80)) throw new Error('花廊 烬卫 dry 0');
+  if (inWater(hua, 514, 163) || inOil(hua, 514, 163)) throw new Error('花廊 烬卫 dry 1');
+  if (inWater(hua, 471, 297) || inOil(hua, 471, 297)) throw new Error('花廊 烬卫 dry 2');
+  if (inWater(hua, 329, 297) || inOil(hua, 329, 297)) throw new Error('花廊 烬卫 dry 3');
+  if (inWater(hua, 286, 163) || inOil(hua, 286, 163)) throw new Error('花廊 烬卫 dry 4');
+  if (!inWater(hua, 830, 345)) throw new Error('花廊 wet bag');
+  if (inWater(hua, 100, 200)) throw new Error('花廊 west pocket wet');
+  for (let i = 0; i < hua.crates.length; i++) {
+    const c = hua.crates[i];
+    if (circleRect(hua.player.x, hua.player.y, hua.player.r, c.x, c.y, c.w, c.h)) {
+      throw new Error('花廊 crate on spawn');
+    }
+  }
+  for (let x = 100; x <= 400; x += 10) {
+    for (let i = 0; i < hua.crates.length; i++) {
+      const c = hua.crates[i];
+      if (circleRect(x, 200, PLAYER_R, c.x, c.y, c.w, c.h)) {
+        throw new Error('花廊 crate on dry walk');
+      }
+    }
+  }
+  const hua0 = hua.enemies.find(function (e) { return Math.abs(e.x - 400) < 1 && Math.abs(e.y - 80) < 1; });
+  const hua1 = hua.enemies.find(function (e) { return Math.abs(e.x - 514) < 1 && Math.abs(e.y - 163) < 1; });
+  const hua2 = hua.enemies.find(function (e) { return Math.abs(e.x - 471) < 1 && Math.abs(e.y - 297) < 1; });
+  const hua3 = hua.enemies.find(function (e) { return Math.abs(e.x - 329) < 1 && Math.abs(e.y - 297) < 1; });
+  const hua4 = hua.enemies.find(function (e) { return Math.abs(e.x - 286) < 1 && Math.abs(e.y - 163) < 1; });
+  if (!hua0 || !hua1 || !hua2 || !hua3 || !hua4) throw new Error('花廊 five 烬卫 seats');
+  const huaSeats = [hua0, hua1, hua2, hua3, hua4];
+  for (let i = 0; i < huaSeats.length; i++) {
+    const e = huaSeats[i];
+    const dPlant = dist(e.x, e.y, 400, 200);
+    if (dPlant <= HOT_BLAST_R + (e.r || ENEMY_R)) throw new Error('花廊 primary misses 烬卫');
+    if (e.x < 40 || e.y < 40 || e.x > 960 - 40 || e.y > 400 - 40) throw new Error('花廊 烬卫 margin');
+  }
+  const flowerSeatPos = [];
+  for (let k = 0; k < FLOWER_N; k++) {
+    const ang = -Math.PI / 2 + k * (Math.PI * 2 / FLOWER_N);
+    const fx = 400 + FLOWER_R * Math.cos(ang);
+    const fy = 200 + FLOWER_R * Math.sin(ang);
+    flowerSeatPos.push([Math.round(fx), Math.round(fy)]);
+  }
+  if (Math.abs(flowerSeatPos[0][0] - 400) > 1e-6 || Math.abs(flowerSeatPos[0][1] - 80) > 1e-6) throw new Error('flower formula 0');
+  if (Math.abs(flowerSeatPos[1][0] - 514) > 1e-6 || Math.abs(flowerSeatPos[1][1] - 163) > 1e-6) throw new Error('flower formula 1');
+  if (Math.abs(flowerSeatPos[2][0] - 471) > 1e-6 || Math.abs(flowerSeatPos[2][1] - 297) > 1e-6) throw new Error('flower formula 2');
+  if (Math.abs(flowerSeatPos[3][0] - 329) > 1e-6 || Math.abs(flowerSeatPos[3][1] - 297) > 1e-6) throw new Error('flower formula 3');
+  if (Math.abs(flowerSeatPos[4][0] - 286) > 1e-6 || Math.abs(flowerSeatPos[4][1] - 163) > 1e-6) throw new Error('flower formula 4');
+  for (let i = 0; i < huaSeats.length; i++) {
+    const e = huaSeats[i];
+    let hit = false;
+    for (let k = 0; k < flowerSeatPos.length; k++) {
+      if (dist(e.x, e.y, flowerSeatPos[k][0], flowerSeatPos[k][1]) <= HOT_BLAST_R + (e.r || ENEMY_R)) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) throw new Error('花廊 hot flower reaches 烬卫');
+  }
+  const huaGround = hua.items.find(function (it) { return it.kind === 'flower' && !it.taken; });
+  if (!huaGround) throw new Error('花廊 ground 花爆 present');
+  if (Math.abs(huaGround.x - 200) > 1e-6 || Math.abs(huaGround.y - 200) > 1e-6) throw new Error('花廊 pickup seat');
+  let huaPickGuard = 1e9;
+  for (let i = 0; i < huaSeats.length; i++) {
+    const d = dist(huaGround.x, huaGround.y, huaSeats[i].x, huaSeats[i].y);
+    if (d < huaPickGuard) huaPickGuard = d;
+  }
+  if (huaPickGuard <= HOT_BLAST_R + ENEMY_R) throw new Error('花廊 pickup too close to seat');
+  const huaCoreCx = huaBox.x + huaBox.w * 0.5;
+  const huaCoreCy = huaBox.y + huaBox.h * 0.5;
+  if (!(dist(huaCoreCx, huaCoreCy, 400, 200) > HOT_BLAST_R)) throw new Error('花廊 core outside plant blast');
+  if (!(dist(huaCoreCx, huaCoreCy, 514, 163) > HOT_BLAST_R)) throw new Error('花廊 core outside petal');
+  hua.player.x = 100;
+  hua.player.y = 200;
+  hua.player.hearts = 3;
+  hua.player.inv = 2;
+  hua.hitstop = 0;
+  hua.embers.length = 0;
+  hua.player.x = huaGround.x;
+  hua.player.y = huaGround.y;
+  update(hua, 0.016);
+  if (hua.flowerReady !== true) throw new Error('pick flower → flowerReady');
+  if (hua.toast !== TOAST.flowerGet) throw new Error('捡到花爆 room');
+  hua.player.x = 100;
+  hua.player.y = 200;
+  hua.player.inv = 2;
+  hua.hitstop = 0;
+  hua.embers.length = 0;
+  const huaHp0 = hua0.hp;
+  const huaHp1 = hua1.hp;
+  const huaHp2 = hua2.hp;
+  const huaHp3 = hua3.hp;
+  const huaHp4 = hua4.hp;
+  explode(hua, 400, 200, false);
+  if (hua.flowerReady) throw new Error('花廊 flower spends');
+  if (hua.toast !== TOAST.flowerUse) throw new Error('花开了 room');
+  if (!hua.flowers || hua.flowers.length !== FLOWER_WAVES * FLOWER_N) throw new Error('花廊 flowers queued');
+  if (Math.abs(hua.flowers[0].x - 400) > 1e-6 || Math.abs(hua.flowers[0].y - 80) > 1e-6) throw new Error('花廊 seat 0');
+  if (Math.abs(hua.flowers[1].x - 514) > 1e-6 || Math.abs(hua.flowers[1].y - 163) > 1e-6) throw new Error('花廊 seat 1');
+  if (Math.abs(hua.flowers[2].x - 471) > 1e-6 || Math.abs(hua.flowers[2].y - 297) > 1e-6) throw new Error('花廊 seat 2');
+  if (Math.abs(hua.flowers[3].x - 329) > 1e-6 || Math.abs(hua.flowers[3].y - 297) > 1e-6) throw new Error('花廊 seat 3');
+  if (Math.abs(hua.flowers[4].x - 286) > 1e-6 || Math.abs(hua.flowers[4].y - 163) > 1e-6) throw new Error('花廊 seat 4');
+  if (Math.abs(hua.flowers[5].x - 400) > 1e-6 || Math.abs(hua.flowers[5].y - 80) > 1e-6) throw new Error('花廊 seat 5');
+  if (Math.abs(hua.flowers[10].x - 400) > 1e-6 || Math.abs(hua.flowers[10].y - 80) > 1e-6) throw new Error('花廊 seat 10');
+  if (Math.abs(hua.flowers[0].t - FLOWER_DT) > 1e-6) throw new Error('花廊 dt 1');
+  if (Math.abs(hua.flowers[1].t - FLOWER_DT * 2) > 1e-6) throw new Error('花廊 dt 2');
+  if (Math.abs(hua.flowers[14].t - FLOWER_DT * 15) > 1e-6) throw new Error('花廊 dt 15');
+  if (hua0.hp !== huaHp0 || hua1.hp !== huaHp1 || hua2.hp !== huaHp2 || hua3.hp !== huaHp3 || hua4.hp !== huaHp4) {
+    throw new Error('花廊 primary misses');
+  }
+  hua.hitstop = 0;
+  updateFlowers(hua, FLOWER_DT + 0.01);
+  if (hua.flowers.length !== 14) throw new Error('花廊 first flower 0');
+  if (!(hua0.hp === huaHp0 - 2 || hua0.hp <= 0)) throw new Error('花廊 0 first seat');
+  hua0.x = 400;
+  hua0.y = 80;
+  hua1.x = 514;
+  hua1.y = 163;
+  hua2.x = 471;
+  hua2.y = 297;
+  hua3.x = 329;
+  hua3.y = 297;
+  hua4.x = 286;
+  hua4.y = 163;
+  hua.hitstop = 0;
+  updateFlowers(hua, FLOWER_DT * 14 + 0.05);
+  if (hua.flowers.length !== 0) throw new Error('花廊 flowers finish');
+  if (hua0.hp > 0) throw new Error('花廊 flower dmg 0');
+  if (hua1.hp > 0) throw new Error('花廊 flower dmg 1');
+  if (hua2.hp > 0) throw new Error('花廊 flower dmg 2');
+  if (hua3.hp > 0) throw new Error('花廊 flower dmg 3');
+  if (hua4.hp > 0) throw new Error('花廊 flower dmg 4');
+  hua.flowerReady = true;
+  dropSpark(hua, 200, 200, false);
+  if (hua.flowerReady !== true) throw new Error('dropSpark keeps 花爆');
+  hua.input.dash = true;
+  hua.player.dashT = 0;
+  hua.player.dashCd = 0;
+  hua.hitstop = 0;
+  update(hua, 0.016);
+  if (hua.flowerReady !== true) throw new Error('dash does not consume 花爆');
+  const flowerSelf = makeState();
+  resetRoom(flowerSelf, 0, false);
+  flowerSelf.flowerReady = true;
+  flowerSelf.player.x = 400;
+  flowerSelf.player.y = 80;
+  flowerSelf.player.inv = 0;
+  flowerSelf.player.hearts = 3;
+  explode(flowerSelf, 400, 200, false);
+  if (flowerSelf.player.hearts !== 3) throw new Error('primary dry misses player for flower');
+  flowerSelf.hitstop = 0;
+  updateFlowers(flowerSelf, FLOWER_DT + 0.01);
+  if (flowerSelf.player.hearts !== 2) throw new Error('own flower hurts player');
+  flowerSelf.player.hearts = 3;
+  flowerSelf.player.inv = 0;
+  flowerSelf.player.dashT = DASH_TIME;
+  flowerSelf.flowers = [{ x: 400, y: 80, t: 0, ox: 400, oy: 200 }];
+  flowerSelf.hitstop = 0;
+  updateFlowers(flowerSelf, 0.02);
+  if (flowerSelf.player.hearts !== 3) throw new Error('dash i-frames skip flower');
+  hua.flowerReady = true;
+  hua.sparks.length = 0;
+  if (hua.flowers) hua.flowers.length = 0;
+  hua.player.x = 100;
+  hua.player.y = 200;
+  hua.player.dashT = 0;
+  hua.player.dashCd = 0;
+  hua.player.vx = 0;
+  hua.player.vy = 0;
+  hua.player.inv = 2;
+  hua.input.x = 0;
+  hua.input.y = 0;
+  hua.input.dash = false;
+  hua.hitstop = 0;
+  hua.waters = [{ x: 60, y: 160, w: 80, h: 80 }];
+  dropSpark(hua, 100, 180, false);
+  if (!hua.sparks[hua.sparks.length - 1].wet) throw new Error('花廊 wet spark');
+  const huaBooms = hua.stats.booms;
+  for (let i = 0; i < 24; i++) update(hua, 0.1);
+  if (hua.flowerReady !== true) throw new Error('花廊 wet fizzle does not consume');
+  if (hua.stats.booms !== huaBooms) throw new Error('花廊 wet no extra boom');
+  hua.waters = [];
+  explode(hua, 200, 200, false, false, false, { fork: true });
+  if (hua.flowerReady !== true) throw new Error('花廊 fork does not consume');
+  hua.echoReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  for (let i = 0; i < 12; i++) update(hua, 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 echo does not consume');
+  hua.fanReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateFans(hua, FAN_DT * FAN_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 fan-fork does not consume');
+  hua.drumReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateDrums(hua, 0.55);
+  if (hua.flowerReady !== true) throw new Error('花廊 drum-wave does not consume');
+  hua.pulseReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updatePulses(hua, PULSE_DT * PULSE_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 pulse-aftershock does not consume');
+  hua.rainReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateRains(hua, RAIN_DT * RAIN_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 rain-drop does not consume');
+  hua.springReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateSprings(hua, SPRING_DT * SPRING_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 spring-jet does not consume');
+  hua.waveReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateWaves(hua, WAVE_DT * WAVE_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 wave-seat does not consume');
+  hua.starReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateStars(hua, STAR_DT * STAR_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 star-seat does not consume');
+  hua.crossReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateCrosses(hua, CROSS_DT * CROSS_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 cross-seat does not consume');
+  hua.frameReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateFrames(hua, FRAME_DT * 8 + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 frame-seat does not consume');
+  hua.coilReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateCoils(hua, COIL_DT * COIL_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 coil-seat does not consume');
+  hua.curtainReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateCurtains(hua, CURTAIN_DT * CURTAIN_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 curtain-seat does not consume');
+  hua.gateReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateGates(hua, GATE_DT * GATE_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 gate-seat does not consume');
+  hua.archReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateArches(hua, ARCH_DT * ARCH_WAVES * ARCH_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 arch-seat does not consume');
+  hua.wingReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateWings(hua, WING_DT * WING_WAVES * WING_N * 2 + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 wing-seat does not consume');
+  hua.moonReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateMoons(hua, MOON_DT * MOON_WAVES * MOON_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 moon-seat does not consume');
+  hua.bowlReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateBowls(hua, BOWL_DT * BOWL_WAVES * BOWL_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 bowl-seat does not consume');
+  hua.arrowReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateArrows(hua, ARROW_DT * ARROW_WAVES * ARROW_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 arrow-seat does not consume');
+  hua.anchorReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateAnchors(hua, ANCHOR_DT * ANCHOR_WAVES * ANCHOR_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 anchor-seat does not consume');
+  hua.hammerReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateHammers(hua, HAMMER_DT * HAMMER_WAVES * HAMMER_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 hammer-seat does not consume');
+  hua.spinReady = true;
+  explode(hua, 200, 200, false);
+  hua.flowerReady = true;
+  hua.hitstop = 0;
+  updateSpins(hua, SPIN_DT * SPIN_N + 0.05);
+  if (hua.flowerReady !== true) throw new Error('花廊 spin-orbit does not consume');
+  hua.waters = [];
+  explode(hua, huaBox.x + huaBox.w * 0.5, huaBox.y - 20, false);
+  if (!huaBox.open) throw new Error('花廊 dry trail should open 心核');
+  takeCore(hua, { x: 100, y: 100 });
+  if (!hua.won || hua.toast !== TOAST.all) throw new Error('花廊 should 通关');
+  const hudHua = makeState();
+  resetRoom(hudHua, 56, false);
+  if (roomHudText(hudHua).indexOf('花廊 · 57/') !== 0) throw new Error('HUD 花廊 57/n');
+  if (TAIL_T !== 2) throw new Error('TAIL_T===2');
+  if (TAIL_T !== 2.0) throw new Error('TAIL_T 2.0');
+  if (FLOWER_N !== 5) throw new Error('FLOWER_N 5');
+  if (FLOWER_R !== 120) throw new Error('FLOWER_R 120');
+  if (FLOWER_WAVES !== 3) throw new Error('FLOWER_WAVES 3');
+  if (FLOWER_DT !== 0.10) throw new Error('FLOWER_DT 0.10');
+  if (BLAST_R !== 36) throw new Error('BLAST_R 36');
+  if (HOT_BLAST_R !== 56) throw new Error('HOT_BLAST_R 56');
+  if (TOAST.flowerGet !== '捡到花爆') throw new Error('捡到花爆');
+  if (TOAST.flowerUse !== '花开了') throw new Error('花开了 toast');
+  if (TOAST.flowerRoom !== '花廊试锋') throw new Error('花廊试锋');
 
   const lastWin = makeState();
   resetRoom(lastWin, ROOMS.length - 1, false);
